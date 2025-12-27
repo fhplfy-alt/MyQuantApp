@@ -1,17 +1,17 @@
 import streamlit as st
-import plotly.graph_objects as go # 引入专业绘图库
+import plotly.graph_objects as go
 
 # ==========================================
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V32 B/S实战版", 
+    page_title="V35 显形版", 
     layout="wide", 
-    page_icon="📈",
+    page_icon="🔍",
     initial_sidebar_state="expanded"
 )
 
-st.title("📈 V32 智能量化系统 (B/S买卖点标注)")
+st.title("🔍 V35 智能量化系统 (主力显形版)")
 
 import baostock as bs
 import pandas as pd
@@ -28,23 +28,28 @@ import threading
 bs_lock = threading.Lock()
 
 STRATEGY_TIP = """
-👑 四星共振: 涨停+缺口+连阳+倍量 (最强主升浪)
-🐲 妖股基因: 60天3板 + 筹码>80% (龙头二波)
-🔥 换手锁仓: 高换手 + 筹码>70% (主力接力)
-🔴 温和吸筹: 3连阳涨幅小 + 筹码>62% (潜伏期)
-🚀 金叉/多头: 基础趋势向上
+👑 四星共振: 涨停+缺口+连阳+倍量
+🐲 妖股基因: 60天3板 + 筹码>80%
+🔥 换手锁仓: 高换手 + 筹码>70%
+🔴 温和吸筹: 3连阳涨幅小 + 筹码>62%
 """
 
 ACTION_TIP = """
-🟥 STRONG BUY: 【强烈推荐】确定性极高，重仓信号
-🟧 BUY (博弈/接力): 【激进买入】适合短线快进快出
-🟨 BUY (低吸): 【潜伏买入】适合逢低建仓
-🟦 HOLD: 【持股待涨】趋势完好，拿住不动
-⬜ WAIT/AVOID: 【空仓观望】无机会或趋势向下
+🟥 STRONG BUY: 【重点关注】妖股/四星共振
+🟧 BUY (博弈): 【激进】换手锁仓/接力
+🟨 BUY (低吸): 【稳健】温和吸筹
 """
 
+STRATEGY_LOGIC = {
+    "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
+    "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
+    "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
+    "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
+    "⚠️ 风险评级": "基于乖离率(BIAS)评估"
+}
+
 # ==========================================
-# 1. 核心引擎 (保持 V31 不变)
+# 1. 核心引擎 (保持 V34 不变)
 # ==========================================
 class QuantsEngine:
     def __init__(self):
@@ -74,11 +79,18 @@ class QuantsEngine:
         return stocks
 
     def calc_winner_rate(self, df, current_price):
-        if df.empty: return 0
+        if df.empty: return 0.0
         total_vol = df['volume'].sum()
-        if total_vol == 0: return 0
+        if total_vol == 0: return 0.0
         profit_vol = df[df['close'] < current_price]['volume'].sum()
         return (profit_vol / total_vol) * 100
+
+    def calc_risk_level(self, price, ma5, ma20):
+        if ma5 == 0: return "未知"
+        bias = (price - ma5) / ma5 * 100
+        if bias > 15: return "High (高危)"
+        elif price < ma20: return "Med (破位)"
+        else: return "Low (安全)"
 
     def _process_single_stock(self, code, max_price=None):
         code = self.clean_code(code)
@@ -86,7 +98,7 @@ class QuantsEngine:
         start = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
         
         data = []
-        info = {'name': code, 'industry': '未知', 'ipoDate': '2000-01-01'}
+        info = {'name': code, 'industry': '-', 'ipoDate': '2000-01-01'}
         
         with bs_lock:
             for attempt in range(3):
@@ -107,9 +119,7 @@ class QuantsEngine:
                     time.sleep(0.01)
                     break 
                 except:
-                    bs.logout()
-                    time.sleep(0.5)
-                    bs.login()
+                    bs.logout(); time.sleep(0.5); bs.login()
 
         if not data: return None
         try:
@@ -124,16 +134,20 @@ class QuantsEngine:
             if curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
+        
         try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
         except: ipo_date = datetime.datetime(2000, 1, 1)
         days_listed = (datetime.datetime.now() - ipo_date).days
+
+        df['MA5'] = df['close'].rolling(5).mean()
+        df['MA20'] = df['close'].rolling(20).mean()
+        risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
 
         # --- 策略逻辑 ---
         signal_tags = []
         priority = 0
         action = "WAIT (观望)"
 
-        is_3_red = all(df['close'].tail(3) > df['open'].tail(3))
         is_3_up = all(df['pctChg'].tail(3) > 0)
         sum_3_rise = df['pctChg'].tail(3).sum()
         if (is_3_up and sum_3_rise <= 5 and winner_rate > 62):
@@ -182,12 +196,15 @@ class QuantsEngine:
             "result": {
                 "代码": code, "名称": info['name'], 
                 "所属行业": info['industry'],
-                "现价": curr['close'], "涨跌": f"{curr['pctChg']:.2f}%", 
-                "获利筹码": f"{winner_rate:.1f}%",
+                "现价": curr['close'], 
+                "涨跌": f"{curr['pctChg']:.2f}%", 
+                "获利筹码": winner_rate,
+                "风险评级": risk_level,
                 "策略信号": " + ".join(signal_tags),
-                "操作建议": action,
+                "综合评级": action,
                 "priority": priority
             },
+            # 🔥 这里的名字会传给前端显示
             "alert": f"{info['name']}" if priority >= 90 else None,
             "option": f"{code} | {info['name']}"
         }
@@ -196,13 +213,13 @@ class QuantsEngine:
         results, alerts, valid_codes_list = [], [], []
         lg = bs.login()
         if lg.error_code != '0': return [], [], []
-        progress_bar = st.progress(0, text=f"正在扫描 {len(code_list)} 只股票...")
+        progress_bar = st.progress(0, text=f"🔍 正在扫描 {len(code_list)} 只股票...")
         total = len(code_list)
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 future_to_code = {executor.submit(self._process_single_stock, c, max_price): c for c in code_list}
                 for i, future in enumerate(concurrent.futures.as_completed(future_to_code)):
-                    if i % 5 == 0: progress_bar.progress((i + 1) / total, text=f"扫描中 {i+1}/{total} (命中 {len(results)} 只)...")
+                    if i % 5 == 0: progress_bar.progress((i + 1) / total, text=f"📊 扫描进度 {int((i+1)/total*100)}% | 命中: {len(results)} 只...")
                     try:
                         res = future.result()
                         if res:
@@ -220,7 +237,6 @@ class QuantsEngine:
         bs.login()
         try:
             end = datetime.datetime.now().strftime("%Y-%m-%d")
-            # 🔥 获取更长的数据用于画图 (250天)
             start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pbMRQ", start_date=start, end_date=end, frequency="d", adjustflag="3")
             data = []
@@ -246,8 +262,6 @@ class QuantsEngine:
         df = df.copy()
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA20'] = df['close'].rolling(20).mean()
-        
-        # MACD
         exp1 = df['close'].ewm(span=12, adjust=False).mean()
         exp2 = df['close'].ewm(span=26, adjust=False).mean()
         df['DIF'] = exp1 - exp2
@@ -255,65 +269,28 @@ class QuantsEngine:
         df['MACD'] = 2 * (df['DIF'] - df['DEA'])
         return df
 
-    # 🔥🔥🔥 核心新增：绘制带 B/S 点的专业 K 线图 🔥🔥🔥
     def plot_professional_kline(self, df, title):
-        # 1. 计算买卖点信号
-        # B点：MA5 上穿 MA20 (金叉)
-        # S点：MA5 下穿 MA20 (死叉)
         df['Signal'] = 0
-        df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 # Buy
-        df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 # Sell
+        df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 
+        df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 
 
         buy_points = df[df['Signal'] == 1]
         sell_points = df[df['Signal'] == -1]
 
-        # 2. 创建图表对象
         fig = go.Figure()
-
-        # 3. 绘制蜡烛图 (红涨绿跌)
-        # A股习惯：Red=Up, Green=Down. Plotly默认是绿涨红跌，要反过来设置
         fig.add_trace(go.Candlestick(
-            x=df['date'],
-            open=df['open'], high=df['high'],
-            low=df['low'], close=df['close'],
-            name='K线',
-            increasing_line_color='red', increasing_fillcolor='red',
-            decreasing_line_color='green', decreasing_fillcolor='green'
+            x=df['date'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+            name='K线', increasing_line_color='red', decreasing_line_color='green'
         ))
-
-        # 4. 绘制均线
         fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
         fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
 
-        # 5. 绘制 B 点 (红色向上三角)
-        fig.add_trace(go.Scatter(
-            x=buy_points['date'], 
-            y=buy_points['low'] * 0.98, # 在最低价下方一点点显示
-            mode='markers+text',
-            marker=dict(symbol='triangle-up', size=12, color='red'),
-            text='B', textposition='bottom center',
-            name='买入信号'
-        ))
+        if not buy_points.empty:
+            fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
+        if not sell.empty:
+            fig.add_trace(go.Scatter(x=sell['date'], y=sell['high']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=12, color='green'), text='S', textposition='top center', name='卖出'))
 
-        # 6. 绘制 S 点 (绿色向下三角)
-        fig.add_trace(go.Scatter(
-            x=sell_points['date'], 
-            y=sell_points['high'] * 1.02, # 在最高价上方一点点显示
-            mode='markers+text',
-            marker=dict(symbol='triangle-down', size=12, color='green'),
-            text='S', textposition='top center',
-            name='卖出信号'
-        ))
-
-        # 7. 美化布局
-        fig.update_layout(
-            title=f"{title} - 智能操盘K线 (含B/S点)",
-            xaxis_rangeslider_visible=False, # 隐藏下方滑块，更简洁
-            height=600,
-            template='plotly_white', # 白色背景
-            hovermode='x unified' # 鼠标悬停显示所有数据
-        )
-        
+        fig.update_layout(title=f"{title} - 智能操盘K线 (含B/S点)", xaxis_rangeslider_visible=False, height=600)
         return fig
 
 # ==========================================
@@ -324,7 +301,7 @@ engine = QuantsEngine()
 st.sidebar.header("🕹️ 控制台")
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 pool_mode = st.sidebar.radio("🔎 选股范围:", ("中证500 (中小盘)", "沪深300 (大盘)", "手动输入"))
-scan_limit = st.sidebar.slider("🔢 扫描数量", 50, 500, 200, step=50)
+scan_limit = st.sidebar.slider("🔢 扫描数量 (池大小)", 50, 500, 200, step=50)
 
 if pool_mode == "手动输入":
     default_pool = "600519, 002131, 002312, 600580, 002594"
@@ -341,7 +318,7 @@ else:
     if 'full_pool' in st.session_state:
         full_list = st.session_state['full_pool']
         final_code_list = full_list[:scan_limit] 
-        st.sidebar.info(f"待扫描: {len(final_code_list)} 只")
+        st.sidebar.info(f"池内待扫: {len(final_code_list)} 只 (总库: {len(full_list)})")
     else:
         final_code_list = []
 
@@ -350,25 +327,27 @@ if st.sidebar.button("🚀 启动全策略扫描", type="primary"):
     if not final_code_list:
         st.sidebar.error("请先加载股票！")
     else:
+        st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交")
         scan_res, alerts, valid_options = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
         st.session_state['scan_res'] = scan_res
         st.session_state['valid_options'] = valid_options
         st.session_state['alerts'] = alerts
 
-# --- 策略说明 ---
-with st.expander("📖 **策略信号字典**", expanded=True):
-    c1, c2 = st.columns(2)
-    c1.error("**👑 四星共振**\n涨停+缺口+连阳+倍量\n**含义：最强主升浪**")
-    c1.info("**🔴 温和吸筹**\n3连阳涨幅小+筹码集中\n**含义：主力潜伏期**")
-    c2.warning("**🐲 妖股基因**\n60天3板+筹码>80%\n**含义：龙头二波启动**")
-    c2.success("**🔥 换手锁仓**\n高换手+高获利\n**含义：主力清洗浮筹**")
+with st.expander("📖 **策略逻辑白皮书**", expanded=False):
+    st.markdown("##### 🔍 核心策略定义")
+    for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
 
 st.subheader(f"⚡ 扫描结果 (价格 < {max_price_limit}元)")
 
 if 'scan_res' in st.session_state and st.session_state['scan_res']:
     results = st.session_state['scan_res']
     alerts = st.session_state.get('alerts', [])
-    if alerts: st.success(f"🔥 发现 {len(alerts)} 只【主力高控盘】标的！")
+    
+    # 🔥🔥🔥 核心修改：把名字显示出来 🔥🔥🔥
+    if alerts: 
+        # 把列表里的名字用逗号拼起来
+        alert_names = "、".join(alerts)
+        st.success(f"🔥 发现 {len(alerts)} 只【主力高控盘】标的：**{alert_names}**")
     
     df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
     
@@ -380,9 +359,10 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
             column_config={
                 "代码": st.column_config.TextColumn("代码"),
                 "名称": st.column_config.TextColumn("名称"),
-                "获利筹码": st.column_config.ProgressColumn("获利筹码", format="%f%%", min_value=0, max_value=100),
-                "策略信号": st.column_config.TextColumn("策略信号", help=STRATEGY_TIP, width="large"),
-                "操作建议": st.column_config.TextColumn("操作建议 (看不懂点这 👉)", help=ACTION_TIP, width="medium"),
+                "获利筹码": st.column_config.ProgressColumn("获利筹码(%)", format="%.1f%%", min_value=0, max_value=100),
+                "风险评级": st.column_config.TextColumn("风险评级", help="基于乖离率计算"),
+                "策略信号": st.column_config.TextColumn("策略信号", width="large"),
+                "综合评级": st.column_config.TextColumn("综合评级", help=ACTION_TIP, width="medium"),
                 "priority": None
             }
         )
@@ -391,12 +371,10 @@ else:
 
 st.divider()
 
-# --- 深度分析 (V32 升级版) ---
 if 'valid_options' in st.session_state and st.session_state['valid_options']:
     st.subheader("🧠 深度分析")
     target = st.selectbox("选择目标进行深度分析", st.session_state['valid_options'])
     
-    # 自动提取代码
     target_code = target.split("|")[0].strip()
     target_name = target.split("|")[1].strip()
 
@@ -414,9 +392,6 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
                 pe = last.get('peTTM', 0)
                 col3.metric("PE估值", f"{pe:.1f}")
                 
-                # 🔥 V32 核心：渲染带 B/S 点的专业图表
                 fig = engine.plot_professional_kline(df, target_name)
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # 额外的文字提示
-                st.info("💡 **图例说明**：\n🔺 **红色 B**：均线金叉买点，建议介入。\n🔻 **绿色 S**：均线死叉卖点，建议离场。")
+                st.info("💡 **图例**: 🔺红色B=金叉买点 | 🔻绿色S=死叉卖点 (仅供辅助参考)")
