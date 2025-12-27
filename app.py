@@ -11,6 +11,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# 🔥🔥🔥 这里的标题改成了 V35 🔥🔥🔥
 st.title("🔍 V35 智能量化系统 (主力显形版)")
 
 import baostock as bs
@@ -49,7 +50,7 @@ STRATEGY_LOGIC = {
 }
 
 # ==========================================
-# 1. 核心引擎 (保持 V34 不变)
+# 1. 核心引擎
 # ==========================================
 class QuantsEngine:
     def __init__(self):
@@ -204,7 +205,6 @@ class QuantsEngine:
                 "综合评级": action,
                 "priority": priority
             },
-            # 🔥 这里的名字会传给前端显示
             "alert": f"{info['name']}" if priority >= 90 else None,
             "option": f"{code} | {info['name']}"
         }
@@ -327,7 +327,7 @@ if st.sidebar.button("🚀 启动全策略扫描", type="primary"):
     if not final_code_list:
         st.sidebar.error("请先加载股票！")
     else:
-        st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交")
+        st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交 | 扫描策略：四星+妖股+换手+吸筹")
         scan_res, alerts, valid_options = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
         st.session_state['scan_res'] = scan_res
         st.session_state['valid_options'] = valid_options
@@ -343,9 +343,7 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
     results = st.session_state['scan_res']
     alerts = st.session_state.get('alerts', [])
     
-    # 🔥🔥🔥 核心修改：把名字显示出来 🔥🔥🔥
     if alerts: 
-        # 把列表里的名字用逗号拼起来
         alert_names = "、".join(alerts)
         st.success(f"🔥 发现 {len(alerts)} 只【主力高控盘】标的：**{alert_names}**")
     
