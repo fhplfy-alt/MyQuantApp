@@ -5,13 +5,13 @@ import plotly.graph_objects as go
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V36 终极体验版", 
+    page_title="V37 修复版", 
     layout="wide", 
-    page_icon="🧬",
+    page_icon="🔧",
     initial_sidebar_state="expanded"
 )
 
-st.title("🧬 V36 智能量化系统 (交互体验增强版)")
+st.title("🔧 V37 智能量化系统 (画图修复版)")
 
 import baostock as bs
 import pandas as pd
@@ -23,11 +23,10 @@ import concurrent.futures
 import threading
 
 # ==========================================
-# 0. 全局配置与悬停文案 (这里就是鼠标放上去显示的内容)
+# 0. 全局配置
 # ==========================================
 bs_lock = threading.Lock()
 
-# 📝 策略信号的悬停说明
 STRATEGY_TIP = """
 👇 信号含义说明：
 👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足，最强主升浪信号！
@@ -37,7 +36,6 @@ STRATEGY_TIP = """
 🚀 金叉/多头: 基础均线趋势向上。
 """
 
-# 📝 综合评级的悬停说明
 ACTION_TIP = """
 👇 操作建议说明：
 🟥 STRONG BUY: 【重点关注】确定性极高，适合重仓 (如四星/妖股)。
@@ -47,7 +45,6 @@ ACTION_TIP = """
 ⬜ WAIT: 【观望】无机会或风险大。
 """
 
-# 策略逻辑字典
 STRATEGY_LOGIC = {
     "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
     "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
@@ -57,7 +54,7 @@ STRATEGY_LOGIC = {
 }
 
 # ==========================================
-# 1. 核心引擎 (保持不变)
+# 1. 核心引擎
 # ==========================================
 class QuantsEngine:
     def __init__(self):
@@ -142,7 +139,6 @@ class QuantsEngine:
             if curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
-        
         try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
         except: ipo_date = datetime.datetime(2000, 1, 1)
         days_listed = (datetime.datetime.now() - ipo_date).days
@@ -294,8 +290,10 @@ class QuantsEngine:
 
         if not buy_points.empty:
             fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
-        if not sell.empty:
-            fig.add_trace(go.Scatter(x=sell['date'], y=sell['high']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=12, color='green'), text='S', textposition='top center', name='卖出'))
+        
+        # 🔥🔥🔥 修正点：把 sell 改成 sell_points 🔥🔥🔥
+        if not sell_points.empty:
+            fig.add_trace(go.Scatter(x=sell_points['date'], y=sell_points['high']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=12, color='green'), text='S', textposition='top center', name='卖出'))
 
         fig.update_layout(title=f"{title} - 智能操盘K线 (含B/S点)", xaxis_rangeslider_visible=False, height=600)
         return fig
@@ -359,7 +357,6 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
     if df_scan.empty:
         st.warning(f"⚠️ 扫描完成，无符合条件的股票。")
     else:
-        # 🔥🔥🔥 核心修改点：加入 help 参数 🔥🔥🔥
         st.dataframe(
             df_scan, use_container_width=True, hide_index=True,
             column_config={
@@ -367,13 +364,8 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
                 "名称": st.column_config.TextColumn("名称"),
                 "获利筹码": st.column_config.ProgressColumn("获利筹码(%)", format="%.1f%%", min_value=0, max_value=100),
                 "风险评级": st.column_config.TextColumn("风险评级", help="基于乖离率计算"),
-                
-                # 👇 这里加了 STRATEGY_TIP
                 "策略信号": st.column_config.TextColumn("策略信号", help=STRATEGY_TIP, width="large"),
-                
-                # 👇 这里加了 ACTION_TIP
                 "综合评级": st.column_config.TextColumn("综合评级", help=ACTION_TIP, width="medium"),
-                
                 "priority": None
             }
         )
