@@ -1,17 +1,20 @@
 import streamlit as st
+import time
+import datetime
 
 # ==========================================
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V45 完美说明书版", 
+    page_title="V50 最终完美版", 
     layout="wide", 
-    page_icon="🛡️",
+    page_icon="🚀",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V45 智能量化系统 (全信号图例版)")
-st.caption("✅ 系统已就绪 | 核心组件加载完成 | V45 Build")
+st.title("🚀 V50 智能量化系统 (东方财富·秒级实时)")
+# 现在 time 已经导入了，这句话就不会报错了
+st.caption(f"✅ 数据源：Eastmoney | 更新时间：{time.strftime('%H:%M:%S')} (确保盘中数据实时)")
 
 # ==========================================
 # 1. 安全导入
@@ -22,34 +25,32 @@ try:
     import baostock as bs
     import pandas as pd
     import numpy as np
-    import time
-    import datetime
+    import urllib.request
+    import json
     from sklearn.linear_model import LinearRegression
+    import threading
 except ImportError as e:
     st.error(f"❌ 启动失败！缺少必要运行库: {e}")
     st.stop()
 
 # ==========================================
-# 0. 全局配置 (🔥 核心修改区：说明书补全 🔥)
+# 0. 全局配置
 # ==========================================
-# 这里补全了你在表格里可能看到的所有信号
+bs_lock = threading.Lock()
+
 STRATEGY_TIP = """
-👇 信号含义详细对照：
-👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足，最强主升浪信号！
-🐲 妖股基因: 60天内3板 + 筹码>80%，游资龙头特征。
-🔥 换手锁仓: 连续高换手 + 高获利，主力清洗浮筹接力。
-🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中，主力潜伏期。
-📈 多头排列: 股价收阳且重心上移，趋势健康，建议持有。
-🚀 金叉突变: 短期均线向上金叉长期均线，买入信号。
-⚡ 死叉/空头: 趋势向下或破位，建议规避。
+👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足
+🐲 妖股基因: 60天内3板 + 筹码>80%
+🔥 换手锁仓: 连续高换手 + 高获利
+🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中
+🚀 金叉/多头: 基础趋势向上
 """
 
 ACTION_TIP = """
-👇 操作建议说明：
 🟥 STRONG BUY: 【重点关注】确定性极高
 🟧 BUY (博弈): 【激进买入】短线博弈
 🟨 BUY (低吸): 【稳健买入】逢低建仓
-🟦 HOLD: 【持股】趋势完好，拿住不动
+🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
 """
 
@@ -62,7 +63,7 @@ STRATEGY_LOGIC = {
 }
 
 # ==========================================
-# 2. 核心引擎 (V44 稳定内核保持不变)
+# 2. 核心引擎
 # ==========================================
 class QuantsEngine:
     def __init__(self):
@@ -73,6 +74,37 @@ class QuantsEngine:
         if not (code.startswith('sh.') or code.startswith('sz.')):
             return f"sh.{code}" if code.startswith('6') else f"sz.{code}"
         return code
+
+    # 🔥 东方财富秒级接口 (V49的核心，保留)
+    def get_realtime_quote(self, code):
+        try:
+            clean_code = code.split('.')[-1]
+            market_id = "1" if code.startswith("sh") else "0"
+            secid = f"{market_id}.{clean_code}"
+            url = f"https://push2.eastmoney.com/api/qt/stock/get?invt=2&fltt=2&fields=f43,f44,f45,f46,f47,f48,f60,f168,f170&secid={secid}"
+            
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=2) as f:
+                content = f.read().decode('utf-8')
+                json_data = json.loads(content)
+                if json_data and json_data.get('data'):
+                    d = json_data['data']
+                    try:
+                        current_price = float(d['f43'])
+                        if current_price == 0: current_price = float(d['f60']) # 停牌用昨收
+                        return {
+                            'date': datetime.date.today().strftime("%Y-%m-%d"),
+                            'open': float(d['f46']),
+                            'pre_close': float(d['f60']),
+                            'close': current_price,
+                            'high': float(d['f44']),
+                            'low': float(d['f45']),
+                            'volume': float(d['f47']) * 100,
+                            'turn': float(d['f168'])
+                        }
+                    except: return None
+        except: return None
+        return None
 
     def is_valid(self, code, name):
         if "sh.688" in code: return False 
@@ -120,23 +152,55 @@ class QuantsEngine:
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
                 info['ipoDate'] = row[2]
+            
             rs_ind = bs.query_stock_industry(code)
             if rs_ind.next():
                 info['industry'] = rs_ind.get_row_data()[3] 
+
             if not self.is_valid(code, info['name']): return None
+
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
             while rs.next(): data.append(rs.get_row_data())
-        except: return None
+        except:
+            return None
 
         if not data: return None
         try:
             df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"])
             df = df.apply(pd.to_numeric, errors='coerce')
         except: return None
-        if len(df) < 60: return None
+        
+        if len(df) < 30: return None
+
+        # 🔥 实时数据拼接
+        realtime_data = self.get_realtime_quote(code)
+        if realtime_data and realtime_data['close'] > 0:
+            if str(df.iloc[-1]['date']) != str(realtime_data['date']):
+                pct_chg = (realtime_data['close'] - realtime_data['pre_close']) / realtime_data['pre_close'] * 100
+                new_row = pd.DataFrame([{
+                    "date": realtime_data['date'],
+                    "open": realtime_data['open'],
+                    "close": realtime_data['close'],
+                    "high": realtime_data['high'],
+                    "low": realtime_data['low'],
+                    "volume": realtime_data['volume'],
+                    "pctChg": pct_chg,
+                    "turn": realtime_data['turn']
+                }])
+                df = pd.concat([df, new_row], ignore_index=True)
+            else:
+                idx = df.index[-1]
+                df.at[idx, 'close'] = realtime_data['close']
+                df.at[idx, 'high'] = realtime_data['high']
+                df.at[idx, 'low'] = realtime_data['low']
+                df.at[idx, 'volume'] = realtime_data['volume']
+                df.at[idx, 'turn'] = realtime_data['turn']
+                pct_chg = (realtime_data['close'] - realtime_data['pre_close']) / realtime_data['pre_close'] * 100
+                df.at[idx, 'pctChg'] = pct_chg
 
         curr = df.iloc[-1]
         prev = df.iloc[-2]
+        
         if max_price is not None:
             if curr['close'] > max_price: return None
 
@@ -160,7 +224,10 @@ class QuantsEngine:
             priority = max(priority, 60)
             action = "BUY (低吸)"
 
-        is_high_turn = all(df['turn'].tail(2) > 5) 
+        turn_val = df['turn'].iloc[-1] 
+        prev_turn = df['turn'].iloc[-2]
+        is_high_turn = (turn_val > 5 and prev_turn > 5)
+
         if is_high_turn and winner_rate > 70:
             signal_tags.append("🔥换手锁仓")
             priority = max(priority, 70)
@@ -374,11 +441,11 @@ else:
         final_code_list = []
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
+if st.sidebar.button("🚀 启动全策略扫描 (V50最终版)", type="primary"):
     if not final_code_list:
         st.sidebar.error("请先加载股票！")
     else:
-        st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交 | 模式：长连接稳定扫描")
+        st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交 | 模式：实时行情+战法扫描")
         scan_res, alerts, valid_options = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
         st.session_state['scan_res'] = scan_res
         st.session_state['valid_options'] = valid_options
@@ -410,7 +477,6 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
                 "名称": st.column_config.TextColumn("名称"),
                 "获利筹码": st.column_config.ProgressColumn("获利筹码(%)", format="%.1f%%", min_value=0, max_value=100),
                 "风险评级": st.column_config.TextColumn("风险评级", help="基于乖离率计算"),
-                # 🔥 这里是修改的核心：STRATEGY_TIP 现在包含了“多头”的解释
                 "策略信号": st.column_config.TextColumn("策略信号", help=STRATEGY_TIP, width="large"),
                 "综合评级": st.column_config.TextColumn("综合评级", help=ACTION_TIP, width="medium"),
                 "priority": None
@@ -429,17 +495,45 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
     target_name = target.split("|")[1].strip()
 
     if st.button(f"🚀 立即分析 {target_name}"):
-        with st.spinner("AI 正在推演未来变盘点..."):
+        with st.spinner("AI 正在深度运算 (含实时矫正)..."):
+            
             df = engine.get_deep_data(target_code)
+            # 🔥 调用东方财富秒级接口
+            realtime_quote = engine.get_realtime_quote(target_code)
+            
             if df is not None:
+                if realtime_quote and realtime_quote['close'] > 0:
+                    if str(df.iloc[-1]['date']) != str(realtime_quote['date']):
+                        pct_chg = (realtime_quote['close'] - realtime_quote['pre_close']) / realtime_quote['pre_close'] * 100
+                        new_row = pd.DataFrame([{
+                            "date": realtime_quote['date'],
+                            "open": realtime_quote['open'],
+                            "close": realtime_quote['close'],
+                            "high": realtime_quote['high'],
+                            "low": realtime_quote['low'],
+                            "volume": realtime_quote['volume'],
+                            "peTTM": 0, "pbMRQ": 0
+                        }])
+                        df = pd.concat([df, new_row], ignore_index=True)
+                    else:
+                        idx = df.index[-1]
+                        df.at[idx, 'close'] = realtime_quote['close']
+                        df.at[idx, 'high'] = realtime_quote['high']
+                        df.at[idx, 'low'] = realtime_quote['low']
+                        df.at[idx, 'volume'] = realtime_quote['volume']
+
                 df = engine.calc_indicators(df)
                 future_info = engine.run_ai_prediction(df)
                 
                 if future_info:
                     last = df.iloc[-1]
+                    
+                    # 优先使用实时价格显示
+                    current_price = realtime_quote['close'] if realtime_quote else last['close']
+                    
                     col1, col2, col3 = st.columns(3)
-                    col1.metric("当前价格", f"¥{last['close']:.2f}")
-                    col2.metric("AI预测明日", f"¥{future_info['pred_price']:.2f}", delta=f"{future_info['pred_price']-last['close']:.2f}", delta_color="inverse")
+                    col1.metric("当前价格", f"¥{current_price:.2f}")
+                    col2.metric("AI预测明日", f"¥{future_info['pred_price']:.2f}", delta=f"{future_info['pred_price']-current_price:.2f}", delta_color="inverse")
                     pe = last.get('peTTM', 0)
                     col3.metric("PE估值", f"{pe:.1f}")
                     
@@ -453,12 +547,12 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
                     st.markdown("### 📅 AI 时空推演 (未来3日)")
                     d_cols = st.columns(3)
                     for i in range(3):
-                        d_cols[i].metric(label=future_info['dates'][i], value=f"¥{future_info['prices'][i]:.2f}", delta="预测")
+                        d_cols[i].metric(label=future_info['dates'][i], value=f"¥{future_info['prices'][i]:.2f}", delta="预测", delta_color="inverse")
+
+                    fig = engine.plot_professional_kline(df, target_name)
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.info("💡 **图例**: 🔺红色B=金叉买点 | 🔻绿色S=死叉卖点 (仅供辅助参考)")
                 else:
                     st.warning("数据不足，无法预测")
-
-                fig = engine.plot_professional_kline(df, target_name)
-                st.plotly_chart(fig, use_container_width=True)
-                st.info("💡 **图例**: 🔺红色B=金叉买点 | 🔻绿色S=死叉卖点 (仅供辅助参考)")
             else:
                 st.error("无法获取数据")
