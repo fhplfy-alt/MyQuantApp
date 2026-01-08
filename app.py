@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V60 真正全市场", 
+    page_title="V61 界面补全版", 
     layout="wide", 
-    page_icon="⚔️",
+    page_icon="📜",
     initial_sidebar_state="expanded"
 )
 
-st.title("⚔️ V60 智能量化系统 (0-6000只·真全市场)")
-st.caption("✅ 已修复全市场加载逻辑 | ✅ 自动识别最近交易日")
+st.title("📜 V61 智能量化系统 (全策略·全显示)")
+st.caption("✅ 已补全PDF战法说明 | ✅ 0-6000只全解锁")
 
 # ==========================================
 # 1. 安全导入
@@ -37,12 +37,14 @@ except ImportError as e:
 # ==========================================
 bs_lock = threading.Lock()
 
+# 🔥🔥🔥 修复：补全悬停提示 🔥🔥🔥
 STRATEGY_TIP = """
 🌤️ 首阳首板: 涨停后缩量回调，今日再收阳 (N字反转)
 🤐 极度缩量: 量能萎缩至5日均量一半 (洗盘特征)
 👑 四星共振: [涨停+缺口+连阳+倍量] 最强主升
 🐲 妖股基因: 60天内3板 + 筹码>80%
 🔥 换手锁仓: 高换手 + 高获利
+🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中
 """
 
 ACTION_TIP = """
@@ -52,6 +54,17 @@ ACTION_TIP = """
 🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
 """
+
+# 🔥🔥🔥 修复：补全白皮书定义 (你截图里缺的就是这个) 🔥🔥🔥
+STRATEGY_LOGIC = {
+    "🌤️ 首阳首板 (PDF核心)": "近期有涨停 + 回调期间不破支撑 + 缩量 + 今日收阳",
+    "🤐 极度缩量 (PDF核心)": "今日成交量 < 5日均量 * 0.6 (主力洗盘)",
+    "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
+    "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
+    "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
+    "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
+    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
+}
 
 ALL_INDUSTRIES = [
     "农林牧渔", "采掘", "化工", "钢铁", "有色金属", "电子", "家用电器", "食品饮料", 
@@ -113,43 +126,35 @@ class QuantsEngine:
         except: return None
         return None
 
-    # 🔥🔥🔥 核心修复：强制获取全市场数据 🔥🔥🔥
     def get_all_stocks(self):
         bs.login()
         stocks = []
         try:
-            # 尝试获取今天的，如果今天没数据(周末)，往前推直到获取到为止
+            # 强制全市场
             for i in range(5):
                 date = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 rs = bs.query_all_stock(day=date)
-                
-                # 检查是否有数据返回
-                temp_stocks = []
+                temp = []
                 while rs.next():
-                    # 格式: code, tradeStatus, code_name
-                    # 只要还在上市交易的 (tradeStatus='1')
-                    if rs.get_row_data()[1] == '1':
-                        temp_stocks.append(rs.get_row_data()[0])
-                
-                if len(temp_stocks) > 1000:
-                    stocks = temp_stocks
-                    break # 成功获取到大量数据，跳出循环
-            
+                    if rs.get_row_data()[1] == '1': temp.append(rs.get_row_data()[0])
+                if len(temp) > 1000:
+                    stocks = temp; break
         except: pass
         finally: bs.logout()
         
-        # 万一还是失败，才用指数保底
         if len(stocks) < 100:
-            return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
-            
+             return self.get_index_stocks_backup()
         return stocks
 
-    def get_index_stocks(self, index_type="zz500"):
+    def get_index_stocks_backup(self):
         bs.login()
         stocks = []
         try:
-            rs = bs.query_hs300_stocks() if index_type == "hs300" else bs.query_zz500_stocks()
+            rs = bs.query_zz500_stocks()
             while rs.next(): stocks.append(rs.get_row_data()[1])
+            rs2 = bs.query_hs300_stocks()
+            while rs2.next(): stocks.append(rs2.get_row_data()[1])
+            stocks = list(set(stocks))
         except: pass
         finally: bs.logout()
         return stocks
@@ -239,6 +244,7 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
+        # PDF 首阳首板
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         
@@ -259,6 +265,7 @@ class QuantsEngine:
                             priority = 110
                             action = "STRONG BUY"
 
+        # PDF 极度缩量
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
         if curr['volume'] < vol_ma5 * 0.6: 
             signal_tags.append("🤐极度缩量"); priority = max(priority, 5)
@@ -303,11 +310,15 @@ class QuantsEngine:
         bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
         
         for i, c in enumerate(code_list):
-            if i%5==0: bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)})")
+            if i % 5 == 0:
+                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)})")
             try:
-                time.sleep(0.05)
+                time.sleep(0.02)
                 r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
-                if r: results.append(r["result"]); alerts.append(r["alert"]) if r["alert"] else None; codes.append(r["option"])
+                if r: 
+                    results.append(r["result"])
+                    if r["alert"]: alerts.append(r["alert"])
+                    codes.append(r["option"])
             except: 
                 continue
 
@@ -319,11 +330,11 @@ class QuantsEngine:
         bs.login()
         end = datetime.datetime.now().strftime("%Y-%m-%d")
         start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
-        rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM", start_date=start, end_date=end, frequency="d", adjustflag="3")
+        rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
         data = [r for r in rs.get_data()]
         bs.logout()
         if not data: return None
-        return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM"]).apply(pd.to_numeric, errors='coerce').dropna()
+        return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
 
 engine = QuantsEngine()
 
@@ -348,7 +359,7 @@ allow_kc = st.sidebar.checkbox("包含科创板 (688)", value=False)
 allow_bj = st.sidebar.checkbox("包含北交所 (8xx)", value=False)
 
 mode = st.sidebar.radio("选股范围", ("全市场精选", "手动输入"))
-limit = st.sidebar.slider("🔢 扫描数量", 100, 6000, 200)
+limit = st.sidebar.slider("🔢 扫描数量", 100, 6000, 500)
 
 if mode == "手动":
     pool = st.sidebar.text_area("代码池", "600519, 002131").replace("，", ",").split(",")
@@ -372,6 +383,11 @@ if st.session_state.get('al'):
     names = "、".join(st.session_state['al'])
     st.success(f"🔥 发现 {len(st.session_state['al'])} 只龙头/首板标的：**{names}**")
 
+with st.expander("📖 **策略逻辑白皮书 (透明度报告)**", expanded=False):
+    st.markdown("##### 🔍 核心策略定义")
+    # 🔥 这里现在会显示你截图里缺少的那些定义了
+    for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
+
 if st.session_state.get('res'):
     st.dataframe(pd.DataFrame(st.session_state['res']), use_container_width=True, 
                  column_config={
@@ -393,26 +409,26 @@ if st.session_state.get('opts'):
         if df is not None:
             if rt:
                 if str(df.iloc[-1]['date']) != str(rt['date']):
-                     new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0}])
+                     new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg":0}])
                      df = pd.concat([df, new], ignore_index=True)
                 else:
                      df.at[df.index[-1], 'close'] = rt['close']
 
             df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
             
-            last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index() if 'pctChg' in df else None
-            support_msg = "无近期涨停"
+            last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
             if last_limit_idx:
                 limit_row = df.loc[last_limit_idx]
                 support_half = (limit_row['open'] + limit_row['close']) / 2
                 wash_days = len(df) - 1 - last_limit_idx
-                support_msg = f"¥{support_half:.2f} (涨停1/2位)"
-                st.metric("🚿 洗盘天数", f"{wash_days}天")
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
-            c2.metric("🛡️ 首板1/2强支撑", support_msg, help="跌破此位需止损")
-            c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
+                c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
+                c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
+                c4.metric("🚿 洗盘天数", f"{wash_days}天")
+            else:
+                st.info("近期无涨停")
 
             fig = go.Figure(data=[go.Candlestick(x=df['date'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], increasing_line_color='red', decreasing_line_color='green', name='K线')])
             fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange')))
@@ -426,7 +442,6 @@ if st.session_state.get('opts'):
             st.plotly_chart(fig, use_container_width=True)
             st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
 
-# 研报
 st.sidebar.markdown("---")
 if st.sidebar.checkbox("📄 启用研报分析"):
     st.subheader("📄 智能文档分析器")
