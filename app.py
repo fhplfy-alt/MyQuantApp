@@ -6,13 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V62 修复版", 
+    page_title="V63 终极修复版", 
     layout="wide", 
-    page_icon="🛠️",
+    page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛠️ V62 智能量化系统 (输入框修复·全功能)")
+st.title("🛡️ V63 智能量化系统 (最终稳定内核)")
+st.caption("✅ 已修复手动模式报错 | ✅ 全功能集结")
 
 # ==========================================
 # 1. 安全导入
@@ -126,6 +127,7 @@ class QuantsEngine:
         bs.login()
         stocks = []
         try:
+            # 优先尝试全市场接口
             for i in range(5):
                 date = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 rs = bs.query_all_stock(day=date)
@@ -136,6 +138,8 @@ class QuantsEngine:
                     stocks = temp; break
         except: pass
         finally: bs.logout()
+        
+        # 保底策略
         if len(stocks) < 100:
              return self.get_index_stocks_backup()
         return stocks
@@ -171,6 +175,13 @@ class QuantsEngine:
         if total_vol == 0: return 0.0
         profit_vol = df[df['close'] < current_price]['volume'].sum()
         return (profit_vol / total_vol) * 100
+
+    def calc_risk_level(self, price, ma5, ma20):
+        if ma5 == 0: return "未知"
+        bias = (price - ma5) / ma5 * 100
+        if bias > 15: return "High (高危)"
+        elif price < ma20: return "Med (破位)"
+        else: return "Low (安全)"
 
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         code = self.clean_code(code)
@@ -230,34 +241,26 @@ class QuantsEngine:
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
         
+        try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
+        except: ipo_date = datetime.datetime(2000, 1, 1)
+        days_listed = (datetime.datetime.now() - ipo_date).days
+
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
+        risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
 
         signal_tags = []
         priority = 0
         action = "WAIT"
 
-        # PDF 战法
-        recent_days = df.iloc[-15:-1]
-        limit_ups = recent_days[recent_days['pctChg'] > 9.5]
-        
-        if not limit_ups.empty:
-            last_limit_idx = limit_ups.index[-1]
-            limit_row = df.loc[last_limit_idx]
-            days_since = len(df) - 1 - last_limit_idx
-            
-            if 2 <= days_since <= 8:
-                if curr['close'] > curr['open']:
-                    min_low_during_correction = df.iloc[last_limit_idx+1:-1]['low'].min()
-                    ma10_support = df['MA10'].iloc[-1]
-                    if min_low_during_correction >= ma10_support * 0.98:
-                        vol_limit = limit_row['volume']
-                        vol_correction_avg = df.iloc[last_limit_idx+1:-1]['volume'].mean()
-                        if vol_correction_avg < vol_limit:
-                            signal_tags.append("🌤️首阳首板(N字)")
-                            priority = 110
-                            action = "STRONG BUY"
+        # 策略集合
+        recent_10 = df.tail(10).iloc[:-1]
+        has_limit_recent = len(recent_10[recent_10['pctChg'] > 9.5]) > 0
+        is_today_red = curr['close'] > curr['open']
+        is_correction = prev['close'] < df.tail(5)['high'].max()
+        if has_limit_recent and is_today_red and is_correction:
+            signal_tags.append("🌤️首阳首板"); priority = 95; action = "STRONG BUY"
 
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
         if curr['volume'] < vol_ma5 * 0.6: 
@@ -278,9 +281,8 @@ class QuantsEngine:
         is_red4 = (df['close'].tail(4) > df['open'].tail(4)).all()
         if has_limit_20 and is_red4 and is_double:
             signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
-        
-        # 多头排列
-        elif prev['open'] < prev['close'] and curr['close'] > prev['close']:
+            
+        if prev['open'] < prev['close'] and curr['close'] > prev['close']:
              if priority == 0:
                  signal_tags.append("📈多头排列"); priority = 10; action = "HOLD"
 
@@ -290,8 +292,9 @@ class QuantsEngine:
             "result": {
                 "代码": code, "名称": info['name'], "行业": info['industry'], 
                 "现价": curr['close'], "涨跌": f"{curr['pctChg']:.2f}%", 
-                "获利筹码": winner_rate, "策略信号": " + ".join(signal_tags),
-                "操作建议": action, "priority": priority
+                "获利筹码": winner_rate, "风险评级": risk_level,
+                "策略信号": " + ".join(signal_tags),
+                "综合评级": action, "priority": priority
             },
             "alert": f"{info['name']}" if priority >= 90 else None,
             "option": f"{code} | {info['name']}"
@@ -300,7 +303,7 @@ class QuantsEngine:
     def scan_market(self, code_list, max_p, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
         lg = bs.login()
-        if lg.error_code != '0': return [],[],[]
+        if lg.error_code != '0': return [],[],[], None
         
         market_status = self.get_market_sentiment()
         
@@ -324,7 +327,7 @@ class QuantsEngine:
         return results, alerts, codes, market_status
 
     @st.cache_data(ttl=600)
-    def get_deep(_self, code):
+    def get_deep(self, code):
         bs.login()
         try:
             end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -366,7 +369,8 @@ limit = st.sidebar.slider("🔢 扫描数量", 100, 6000, 200)
 if mode == "手动输入":
     default_pool = "600519, 002131, 002312, 600580, 002594"
     target_pool_str = st.sidebar.text_area("监控股票池", default_pool, height=100)
-    final_code_list = target_pool_str.replace("，", ",").split(",")
+    # 🔥 核心修复：这里把变量名统一为 pool
+    pool = target_pool_str.replace("，", ",").split(",")
 else:
     if st.sidebar.button("📥 加载全市场"):
         with st.spinner("正在遍历交易所数据库 (需要几秒钟)..."):
@@ -380,6 +384,7 @@ else:
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
+    # 🔥 核心修复：这里调用 pool，现在无论哪个模式都有 pool 了
     res, al, opts, _ = engine.scan_market(pool, max_p, allow_kc, allow_bj, selected_industries)
     st.session_state.update({'res': res, 'opts': opts, 'al': al})
 
@@ -395,8 +400,9 @@ if st.session_state.get('res'):
     st.dataframe(pd.DataFrame(st.session_state['res']), use_container_width=True, 
                  column_config={
                      "获利筹码": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
+                     "风险评级": st.column_config.TextColumn(help="基于乖离率计算"),
                      "策略信号": st.column_config.TextColumn(help=STRATEGY_TIP, width="large"),
-                     "操作建议": st.column_config.TextColumn(help=ACTION_TIP)
+                     "综合评级": st.column_config.TextColumn(help=ACTION_TIP, width="medium")
                  })
 
 st.divider()
@@ -416,8 +422,7 @@ if st.session_state.get('opts'):
                      df = pd.concat([df, new], ignore_index=True)
                 else:
                      df.at[df.index[-1], 'close'] = rt['close']
-            
-            # 重新计算指标
+
             df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
             
             last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
@@ -438,7 +443,6 @@ if st.session_state.get('opts'):
             fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange')))
             fig.add_trace(go.Scatter(x=df['date'], y=df['MA10'], name='MA10 (生命线)', line=dict(color='blue', width=2)))
             
-            # BS点
             buy = df[(df['MA5']>df['MA10']) & (df['MA5'].shift(1)<=df['MA10'].shift(1))]
             sell = df[(df['MA5']<df['MA10']) & (df['MA5'].shift(1)>=df['MA10'].shift(1))]
             fig.add_trace(go.Scatter(x=buy['date'], y=buy['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', color='red', size=10), text='B'))
