@@ -6,13 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V59 终极完全体", 
+    page_title="V60 真正全市场", 
     layout="wide", 
-    page_icon="👑",
+    page_icon="⚔️",
     initial_sidebar_state="expanded"
 )
 
-st.title("👑 V59 智能量化系统 (全策略·全市场·实时版)")
+st.title("⚔️ V60 智能量化系统 (0-6000只·真全市场)")
+st.caption("✅ 已修复全市场加载逻辑 | ✅ 自动识别最近交易日")
 
 # ==========================================
 # 1. 安全导入
@@ -36,13 +37,12 @@ except ImportError as e:
 # ==========================================
 bs_lock = threading.Lock()
 
-# 悬停提示
 STRATEGY_TIP = """
-👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足
+🌤️ 首阳首板: 涨停后缩量回调，今日再收阳 (N字反转)
+🤐 极度缩量: 量能萎缩至5日均量一半 (洗盘特征)
+👑 四星共振: [涨停+缺口+连阳+倍量] 最强主升
 🐲 妖股基因: 60天内3板 + 筹码>80%
-🔥 换手锁仓: 连续高换手 + 高获利
-🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中
-📈 多头排列: 基础趋势向上
+🔥 换手锁仓: 高换手 + 高获利
 """
 
 ACTION_TIP = """
@@ -52,15 +52,6 @@ ACTION_TIP = """
 🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
 """
-
-# 🔥🔥🔥 这里就是你截图里的内容，完全一致 🔥🔥🔥
-STRATEGY_LOGIC = {
-    "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
-    "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
-    "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
-    "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
-    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
-}
 
 ALL_INDUSTRIES = [
     "农林牧渔", "采掘", "化工", "钢铁", "有色金属", "电子", "家用电器", "食品饮料", 
@@ -122,15 +113,43 @@ class QuantsEngine:
         except: return None
         return None
 
+    # 🔥🔥🔥 核心修复：强制获取全市场数据 🔥🔥🔥
     def get_all_stocks(self):
         bs.login()
         stocks = []
         try:
-            rs = bs.query_zz500_stocks()
+            # 尝试获取今天的，如果今天没数据(周末)，往前推直到获取到为止
+            for i in range(5):
+                date = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+                rs = bs.query_all_stock(day=date)
+                
+                # 检查是否有数据返回
+                temp_stocks = []
+                while rs.next():
+                    # 格式: code, tradeStatus, code_name
+                    # 只要还在上市交易的 (tradeStatus='1')
+                    if rs.get_row_data()[1] == '1':
+                        temp_stocks.append(rs.get_row_data()[0])
+                
+                if len(temp_stocks) > 1000:
+                    stocks = temp_stocks
+                    break # 成功获取到大量数据，跳出循环
+            
+        except: pass
+        finally: bs.logout()
+        
+        # 万一还是失败，才用指数保底
+        if len(stocks) < 100:
+            return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
+            
+        return stocks
+
+    def get_index_stocks(self, index_type="zz500"):
+        bs.login()
+        stocks = []
+        try:
+            rs = bs.query_hs300_stocks() if index_type == "hs300" else bs.query_zz500_stocks()
             while rs.next(): stocks.append(rs.get_row_data()[1])
-            rs2 = bs.query_hs300_stocks()
-            while rs2.next(): stocks.append(rs2.get_row_data()[1])
-            stocks = list(set(stocks))
         except: pass
         finally: bs.logout()
         return stocks
@@ -139,7 +158,6 @@ class QuantsEngine:
         if "ST" in name: return False
         if "sh.688" in code and not allow_kc: return False
         if ("bj." in code or code.startswith("sz.8")) and not allow_bj: return False
-        
         if selected_industries:
             is_match = False
             for ind in selected_industries:
@@ -163,11 +181,10 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        # 独立登录，保证单线程稳定
         bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
-            if rs_info.error_code != '0': return None 
+            if rs_info.error_code != '0': raise Exception()
             if rs_info.next():
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
@@ -214,49 +231,53 @@ class QuantsEngine:
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
         
+        df['MA5'] = df['close'].rolling(5).mean()
+        df['MA10'] = df['close'].rolling(10).mean()
+        df['MA20'] = df['close'].rolling(20).mean()
+
         signal_tags = []
         priority = 0
         action = "WAIT"
 
-        # 策略集合
+        recent_days = df.iloc[-15:-1]
+        limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         
-        # 1. 首阳首板 (PDF)
-        recent_10 = df.tail(10).iloc[:-1]
-        has_limit_recent = len(recent_10[recent_10['pctChg'] > 9.5]) > 0
-        is_today_red = curr['close'] > curr['open']
-        is_correction = prev['close'] < df.tail(5)['high'].max()
-        if has_limit_recent and is_today_red and is_correction:
-            signal_tags.append("🌤️首阳首板"); priority = 95; action = "STRONG BUY"
+        if not limit_ups.empty:
+            last_limit_idx = limit_ups.index[-1]
+            limit_row = df.loc[last_limit_idx]
+            days_since = len(df) - 1 - last_limit_idx
+            
+            if 2 <= days_since <= 8:
+                if curr['close'] > curr['open']:
+                    min_low_during_correction = df.iloc[last_limit_idx+1:-1]['low'].min()
+                    ma10_support = df['MA10'].iloc[-1]
+                    if min_low_during_correction >= ma10_support * 0.98:
+                        vol_limit = limit_row['volume']
+                        vol_correction_avg = df.iloc[last_limit_idx+1:-1]['volume'].mean()
+                        if vol_correction_avg < vol_limit:
+                            signal_tags.append("🌤️首阳首板(N字)")
+                            priority = 110
+                            action = "STRONG BUY"
 
-        # 2. 极度缩量 (PDF)
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
         if curr['volume'] < vol_ma5 * 0.6: 
             signal_tags.append("🤐极度缩量"); priority = max(priority, 5)
 
-        # 3. 温和吸筹
         if all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62:
-            signal_tags.append("🔴温和吸筹"); priority = max(priority, 60); action = "BUY (低吸)"
+            signal_tags.append("🔴温和吸筹"); priority = max(priority, 60); action = "BUY (低吸)" if action=="WAIT" else action
         
-        # 4. 换手锁仓
         if (df['turn'].iloc[-1] > 5 and df['turn'].iloc[-2] > 5) and winner_rate > 70:
-            signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
+            signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)" if action=="WAIT" else action
             
-        # 5. 妖股基因
         limit_60 = len(df.tail(60)[df.tail(60)['pctChg'] > 9.5])
         if limit_60 >= 3 and winner_rate > 80:
             signal_tags.append("🐲妖股基因"); priority = max(priority, 90); action = "STRONG BUY"
 
-        # 6. 四星共振
         has_limit_20 = len(df.tail(20)[df.tail(20)['pctChg'] > 9.5]) > 0
         is_double = curr['volume'] > prev['volume'] * 1.8
         is_red4 = (df['close'].tail(4) > df['open'].tail(4)).all()
         if has_limit_20 and is_red4 and is_double:
             signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
-            
-        # 7. 基础多头 (这里就是你截图里的逻辑)
-        if prev['close'] > prev['open'] and curr['close'] > prev['close']:
-            if priority == 0:
-                signal_tags.append("📈多头排列"); priority = 10; action = "HOLD"
 
         if priority == 0: return None
 
@@ -333,8 +354,14 @@ if mode == "手动":
     pool = st.sidebar.text_area("代码池", "600519, 002131").replace("，", ",").split(",")
 else:
     if st.sidebar.button("📥 加载全市场"):
-        st.session_state['pool'] = engine.get_all_stocks()
-        st.sidebar.success(f"已加载 {len(st.session_state['pool'])} 只")
+        with st.spinner("正在遍历交易所数据库 (需要几秒钟)..."):
+            st.session_state['pool'] = engine.get_all_stocks()
+            st.sidebar.success(f"已加载全量 {len(st.session_state['pool'])} 只")
+    
+    if 'pool' in st.session_state:
+        pool_len = len(st.session_state['pool'])
+        st.sidebar.info(f"市场总数: {pool_len} | 本次扫描前 {limit} 只")
+    
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
@@ -344,11 +371,6 @@ if st.sidebar.button("🚀 启动战神扫描"):
 if st.session_state.get('al'): 
     names = "、".join(st.session_state['al'])
     st.success(f"🔥 发现 {len(st.session_state['al'])} 只龙头/首板标的：**{names}**")
-
-# 🔥🔥🔥 核心：白皮书显示区 🔥🔥🔥
-with st.expander("📖 **策略逻辑白皮书 (透明度报告)**", expanded=False):
-    st.markdown("##### 🔍 核心策略定义")
-    for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
 
 if st.session_state.get('res'):
     st.dataframe(pd.DataFrame(st.session_state['res']), use_container_width=True, 
@@ -378,19 +400,19 @@ if st.session_state.get('opts'):
 
             df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
             
-            last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
+            last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index() if 'pctChg' in df else None
+            support_msg = "无近期涨停"
             if last_limit_idx:
                 limit_row = df.loc[last_limit_idx]
                 support_half = (limit_row['open'] + limit_row['close']) / 2
                 wash_days = len(df) - 1 - last_limit_idx
-                
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
-                c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
-                c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
-                c4.metric("🚿 洗盘天数", f"{wash_days}天")
-            else:
-                st.info("近期无涨停")
+                support_msg = f"¥{support_half:.2f} (涨停1/2位)"
+                st.metric("🚿 洗盘天数", f"{wash_days}天")
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
+            c2.metric("🛡️ 首板1/2强支撑", support_msg, help="跌破此位需止损")
+            c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
 
             fig = go.Figure(data=[go.Candlestick(x=df['date'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], increasing_line_color='red', decreasing_line_color='green', name='K线')])
             fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange')))
