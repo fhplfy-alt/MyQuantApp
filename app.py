@@ -6,13 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V68 完美修复版", 
+    page_title="V70 智能诊断版", 
     layout="wide", 
-    page_icon="🛡️",
+    page_icon="🩺",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V68 智能量化系统 (无报错·全功能)")
+st.title("🩺 V70 智能量化系统 (全功能·自动查错)")
+st.caption("✅ 实时监控运行状态 | ✅ 自动报告错误原因")
 
 # ==========================================
 # 1. 安全导入
@@ -136,7 +137,10 @@ class QuantsEngine:
                     stocks = temp; break
         except: pass
         finally: bs.logout()
-        if len(stocks) < 100: return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
+        
+        # 如果获取不到，使用指数保底
+        if len(stocks) < 100:
+             return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
         return stocks
 
     def get_index_stocks(self, index_type="zz500"):
@@ -199,7 +203,8 @@ class QuantsEngine:
 
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
             while rs.next(): data.append(rs.get_row_data())
-        except: return None
+        except:
+            return None
 
         if not data: return None
         try:
@@ -220,15 +225,18 @@ class QuantsEngine:
 
         curr = df.iloc[-1]
         prev = df.iloc[-2]
+        
         if max_price is not None:
             if curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
+        
         try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
         except: ipo_date = datetime.datetime(2000, 1, 1)
         days_listed = (datetime.datetime.now() - ipo_date).days
 
         df['MA5'] = df['close'].rolling(5).mean()
+        df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
         risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
 
@@ -284,34 +292,55 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 核心修复：统一函数名 + 参数完整传递 🔥🔥🔥
+    # 🔥🔥🔥 V70 核心：带诊断功能的扫描 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
+        
+        # 1. 登录检查
         lg = bs.login()
-        if lg.error_code != '0': return [],[],[], None
+        if lg.error_code != '0':
+            st.error(f"❌ Baostock 登录失败 (Error {lg.error_code})，请检查网络！")
+            return [], [], []
+
+        progress_bar = st.progress(0, text=f"🚀 正在扫描 {len(code_list)} 只股票...")
+        status_text = st.empty() # 状态显示框
+        total = len(code_list)
         
-        market_status = self.get_market_sentiment()
+        fail_count = 0
         
-        filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
-        
+        # 2. 循环处理
         for i, c in enumerate(code_list):
             if i % 2 == 0:
-                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)}) | 命中: {len(results)}")
+                progress_bar.progress((i + 1) / total, text=f"🔍 正在分析: {c} ({i+1}/{total})")
+                status_text.text(f"📊 已命中: {len(results)} 只 | 失败: {fail_count} 只")
             try:
-                time.sleep(0.02)
-                # 🔥 修复了这里：参数完整传递
+                time.sleep(0.01)
                 r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
                     codes.append(r["option"])
             except: 
+                fail_count += 1
+                # 尝试重连
+                bs.logout(); time.sleep(0.5); bs.login()
                 continue
 
         bs.logout()
-        bar.empty()
-        return results, alerts, codes, market_status
+        progress_bar.empty()
+        status_text.empty()
+        
+        # 🔥 如果扫描完了还是 0，给出详细建议
+        if len(results) == 0:
+            st.warning(f"""
+            ⚠️ 扫描完成，但没有找到符合条件的股票。
+            可能原因：
+            1. **价格过滤太严**：当前上限 {max_price} 元，建议调高到 50 或 100 元。
+            2. **行业过滤太严**：建议清空行业选择（全选）。
+            3. **网络问题**：有 {fail_count} 只股票获取失败。
+            """)
+            
+        return results, alerts, codes
 
     @st.cache_data(ttl=600)
     def get_deep(_self, code):
@@ -420,18 +449,8 @@ class QuantsEngine:
 # ==========================================
 engine = QuantsEngine()
 
-market_info = engine.get_market_sentiment()
-if market_info:
-    c1, c2 = st.columns([1, 4])
-    c1.metric("上证指数", market_info['status'], delta_color="inverse")
-    if market_info['color'] == 'red':
-        c2.success(f"📈 策略建议：{market_info['status']}，建议仓位 {market_info['pos']}")
-    else:
-        c2.error(f"📉 策略建议：{market_info['status']}，风险高，建议仓位 {market_info['pos']}")
-st.divider()
-
 st.sidebar.header("🕹️ 战神控制台")
-max_p = st.sidebar.slider("💰 价格上限", 3.0, 500.0, 20.0)
+max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
 st.sidebar.markdown("#### 🏭 行业过滤")
 selected_industries = st.sidebar.multiselect("行业 (留空全选):", options=ALL_INDUSTRIES, default=[])
@@ -444,21 +463,25 @@ limit = st.sidebar.slider("🔢 扫描数量", 100, 6000, 200)
 if mode == "手动输入":
     default_pool = "600519, 002131, 002312, 600580, 002594"
     target_pool_str = st.sidebar.text_area("监控股票池", default_pool, height=100)
-    pool = target_pool_str.replace("，", ",").split(",")
+    final_code_list = target_pool_str.replace("，", ",").split(",")
 else:
     if st.sidebar.button("📥 加载全市场"):
         with st.spinner("正在遍历交易所数据库..."):
             st.session_state['pool'] = engine.get_all_stocks()
             st.sidebar.success(f"已加载全量 {len(st.session_state['pool'])} 只")
     
+    if 'pool' in st.session_state:
+        pool_len = len(st.session_state['pool'])
+        st.sidebar.info(f"市场总数: {pool_len} | 本次扫描前 {limit} 只")
+    
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
-    # 🔥🔥🔥 修正：统一调用 scan_market，且接收 4 个返回值 🔥🔥🔥
-    res, al, opts, _ = engine.scan_market(pool, max_p, allow_kc, allow_bj, selected_industries)
+    # 调用新的扫描函数
+    res, al, opts = engine.scan_market_optimized(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
     
     st.session_state['res'] = res
-    st.session_state['valid_options'] = opts # 确保下拉框有数据
+    st.session_state['valid_options'] = opts
     st.session_state['alerts'] = al
 
 if st.session_state.get('al'): 
@@ -480,51 +503,54 @@ if st.session_state.get('res'):
 
 st.divider()
 
-# 🔥🔥🔥 核心：只要 valid_options 有数据，就显示深度分析 🔥🔥🔥
 if st.session_state.get('valid_options'):
     st.subheader("🧠 深度分析")
     target = st.selectbox("选择目标", st.session_state['valid_options'])
-    if st.button(f"🚀 分析 {target}"):
-        code = target.split("|")[0].strip()
-        df = engine.get_deep(code)
-        rt = engine.get_realtime_quote(code)
-        
-        if df is not None:
-            if rt:
-                if str(df.iloc[-1]['date']) != str(rt['date']):
-                     new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
-                     df = pd.concat([df, new], ignore_index=True)
-                else:
-                     df.at[df.index[-1], 'close'] = rt['close']
+    
+    target_code = target.split("|")[0].strip()
+    target_name = target.split("|")[1].strip()
 
-            df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
-            future_info = engine.run_ai_prediction(df)
+    if st.button(f"🚀 分析 {target_name}"):
+        with st.spinner("AI 正在深度运算..."):
             
-            last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
-            if last_limit_idx:
-                limit_row = df.loc[last_limit_idx]
-                support_half = (limit_row['open'] + limit_row['close']) / 2
-                wash_days = len(df) - 1 - last_limit_idx
+            df = engine.get_deep(target_code)
+            rt = engine.get_realtime_quote(target_code)
+            
+            if df is not None:
+                if rt:
+                    if str(df.iloc[-1]['date']) != str(rt['date']):
+                         new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
+                         df = pd.concat([df, new], ignore_index=True)
                 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
-                c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
-                c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
-                c4.metric("🚿 洗盘天数", f"{wash_days}天")
-            else:
-                st.info("近期无涨停")
-
-            if future_info:
-                st.markdown("---")
-                if future_info['color'] == 'red':
-                    st.error(f"### {future_info['title']}\n{future_info['desc']}")
+                df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
+                future_info = engine.run_ai_prediction(df)
+                
+                last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
+                if last_limit_idx:
+                    limit_row = df.loc[last_limit_idx]
+                    support_half = (limit_row['open'] + limit_row['close']) / 2
+                    wash_days = len(df) - 1 - last_limit_idx
+                    
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
+                    c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
+                    c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
+                    c4.metric("🚿 洗盘天数", f"{wash_days}天")
                 else:
-                    st.info(f"### {future_info['title']}\n{future_info['desc']}")
+                    st.info("近期无涨停")
 
-            fig = engine.plot_professional_kline(df, target.split("|")[1])
-            st.plotly_chart(fig, use_container_width=True)
-            st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
+                if future_info:
+                    st.markdown("---")
+                    if future_info['color'] == 'red':
+                        st.error(f"### {future_info['title']}\n{future_info['desc']}")
+                    else:
+                        st.info(f"### {future_info['title']}\n{future_info['desc']}")
 
+                fig = engine.plot_professional_kline(df, target.split("|")[1])
+                st.plotly_chart(fig, use_container_width=True)
+                st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
+
+# 研报
 st.sidebar.markdown("---")
 if st.sidebar.checkbox("📄 启用研报分析"):
     st.subheader("📄 智能文档分析器")
@@ -533,4 +559,11 @@ if st.sidebar.checkbox("📄 启用研报分析"):
         with pdfplumber.open(uploaded_file) as pdf:
             text = "".join([p.extract_text() for p in pdf.pages[:5]])
             st.success("分析完成！")
+            c1, c2 = st.columns(2)
+            c1.info("🔥 **利好关键词**")
+            for w in ["增长", "新高", "龙头", "受益"]: 
+                if w in text: c1.write(f"✅ {w}")
+            c2.warning("⚠️ **风险关键词**")
+            for w in ["下降", "亏损", "风险", "减持"]: 
+                if w in text: c2.write(f"❌ {w}")
             st.text_area("文档摘要预览", text[:1000], height=300)
