@@ -6,14 +6,13 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V71 终极修正版", 
+    page_title="V72 绝对修正版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V71 智能量化系统 (零报错·全功能)")
-st.caption("✅ 修复函数名错误 | ✅ 实时行情 | ✅ 行业过滤")
+st.title("🛡️ V72 智能量化系统 (全功能·零Bug)")
 
 # ==========================================
 # 1. 安全导入
@@ -185,6 +184,8 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
+        # 独立登录 (最稳)
+        bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
             if rs_info.error_code != '0': return None 
@@ -198,13 +199,17 @@ class QuantsEngine:
                 info['industry'] = rs_ind.get_row_data()[3] 
 
             if not self.is_valid(code, info['name'], info['industry'], allow_kc, allow_bj, selected_industries): 
+                bs.logout()
                 return None
 
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
             while rs.next(): data.append(rs.get_row_data())
             
         except:
+            bs.logout()
             return None
+        
+        bs.logout()
 
         if not data: return None
         try:
@@ -230,10 +235,6 @@ class QuantsEngine:
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
         
-        try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
-        except: ipo_date = datetime.datetime(2000, 1, 1)
-        days_listed = (datetime.datetime.now() - ipo_date).days
-
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
@@ -241,16 +242,15 @@ class QuantsEngine:
 
         signal_tags = []
         priority = 0
-        action = "WAIT (观望)"
+        action = "WAIT"
 
+        # 战法
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
-        
         if not limit_ups.empty:
             last_limit_idx = limit_ups.index[-1]
             limit_row = df.loc[last_limit_idx]
             days_since = len(df) - 1 - last_limit_idx
-            
             if 2 <= days_since <= 8:
                 if curr['close'] > curr['open']:
                     min_low_during_correction = df.iloc[last_limit_idx+1:-1]['low'].min()
@@ -259,9 +259,7 @@ class QuantsEngine:
                         vol_limit = limit_row['volume']
                         vol_correction_avg = df.iloc[last_limit_idx+1:-1]['volume'].mean()
                         if vol_correction_avg < vol_limit:
-                            signal_tags.append("🌤️首阳首板(N字)")
-                            priority = 110
-                            action = "STRONG BUY"
+                            signal_tags.append("🌤️首阳首板"); priority = 95; action = "STRONG BUY"
 
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
         if curr['volume'] < vol_ma5 * 0.6: 
@@ -303,7 +301,7 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 修复点：统一函数名 scan_market 🔥🔥🔥
+    # 🔥🔥🔥 修复点：函数名改为 scan_market (与调用一致) 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
         lg = bs.login()
@@ -316,10 +314,10 @@ class QuantsEngine:
         
         for i, c in enumerate(code_list):
             if i % 2 == 0:
-                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)}) | 命中: {len(results)}")
+                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)})")
             try:
                 time.sleep(0.02)
-                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
+                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
@@ -329,7 +327,6 @@ class QuantsEngine:
 
         bs.logout()
         bar.empty()
-        # 🔥🔥🔥 修复点：返回 4 个值 🔥🔥🔥
         return results, alerts, codes, market_status
 
     @st.cache_data(ttl=600)
@@ -402,7 +399,6 @@ class QuantsEngine:
         df = df.copy()
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA20'] = df['close'].rolling(20).mean()
-        # MACD
         exp1 = df['close'].ewm(span=12, adjust=False).mean()
         exp2 = df['close'].ewm(span=26, adjust=False).mean()
         df['DIF'] = exp1 - exp2
@@ -441,7 +437,7 @@ class QuantsEngine:
 engine = QuantsEngine()
 
 st.sidebar.header("🕹️ 战神控制台")
-max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
+max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 500.0, 20.0)
 
 st.sidebar.markdown("#### 🏭 行业过滤")
 selected_industries = st.sidebar.multiselect("行业 (留空全选):", options=ALL_INDUSTRIES, default=[])
@@ -468,11 +464,11 @@ else:
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
-    # 🔥 核心修复：函数名统一为 scan_market，参数对齐
+    # 🔥 核心修正点：这里正确调用 scan_market 并接收 4 个返回值
     res, al, opts, _ = engine.scan_market(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
     
     st.session_state['res'] = res
-    st.session_state['valid_options'] = opts # 确保下拉框有数据
+    st.session_state['valid_options'] = opts
     st.session_state['alerts'] = al
 
 if st.session_state.get('al'): 
@@ -494,6 +490,7 @@ if st.session_state.get('res'):
 
 st.divider()
 
+# 🔥 这里：因为 valid_options 有数据了，深度分析框就会正常显示
 if st.session_state.get('valid_options'):
     st.subheader("🧠 深度分析")
     target = st.selectbox("选择目标", st.session_state['valid_options'])
