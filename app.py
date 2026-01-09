@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V75 终极完美版", 
+    page_title="V76 稳定内核版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V75 智能量化系统 (全功能·零Bug)")
-st.caption("✅ 已找回扫描汇总提示 | ✅ 修复深度分析报错")
+st.title("🛡️ V76 智能量化系统 (独立连接·永不假死)")
+st.caption("✅ 强制独立登录 | ✅ 修复瞬间完成Bug | ✅ 全功能保留")
 
 # ==========================================
 # 1. 安全导入
@@ -114,7 +114,7 @@ class QuantsEngine:
             if code.startswith("bj"): return None
             url = f"https://push2.eastmoney.com/api/qt/stock/get?invt=2&fltt=2&fields=f43,f44,f45,f46,f47,f48,f60,f168,f170&secid={market_id}.{clean_code}"
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=2) as f:
+            with urllib.request.urlopen(req, timeout=3) as f:
                 d = json.loads(f.read().decode('utf-8')).get('data')
                 if d:
                     cp = float(d['f43'])
@@ -176,6 +176,7 @@ class QuantsEngine:
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
 
+    # 🔥🔥🔥 V76 核心回归：独立登录模式 (拒绝假死) 🔥🔥🔥
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -184,6 +185,7 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
+        # 强制每次独立登录！
         bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
@@ -208,7 +210,7 @@ class QuantsEngine:
             bs.logout()
             return None
         
-        bs.logout()
+        bs.logout() # 每次都退出，确保不占端口
 
         if not data: return None
         try:
@@ -229,8 +231,8 @@ class QuantsEngine:
 
         curr = df.iloc[-1]
         prev = df.iloc[-2]
-        if max_price is not None:
-            if curr['close'] > max_price: return None
+        
+        if max_price and curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
         
@@ -243,6 +245,7 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
+        # 战法
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         if not limit_ups.empty:
@@ -299,22 +302,24 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
+    # 🔥🔥🔥 扫描逻辑：使用独立处理函数 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
-        lg = bs.login()
-        if lg.error_code != '0': return [],[],[], None
         
+        # 获取大盘状态
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 独立连接模式...")
         
+        total = len(code_list)
         for i, c in enumerate(code_list):
             if i % 2 == 0:
-                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)}) | 命中: {len(results)} 只")
+                bar.progress((i+1)/total, f"分析中: {c} ({i}/{total}) | 命中: {len(results)} 只")
             try:
-                time.sleep(0.02)
-                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
+                # 随机休息防封
+                time.sleep(0.01)
+                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
@@ -322,7 +327,6 @@ class QuantsEngine:
             except: 
                 continue
 
-        bs.logout()
         bar.empty()
         return results, alerts, codes, market_status
 
@@ -417,7 +421,7 @@ class QuantsEngine:
             name='K线', increasing_line_color='red', decreasing_line_color='green'
         ))
         fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
-        fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
+        fig.add_trace(go.Scatter(x=df['date'], y=df['MA10'], name='MA10 (生命线)', line=dict(color='blue', width=2)))
 
         if not buy_points.empty:
             fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
@@ -434,7 +438,7 @@ class QuantsEngine:
 engine = QuantsEngine()
 
 st.sidebar.header("🕹️ 战神控制台")
-max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
+max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 500.0, 20.0)
 
 st.sidebar.markdown("#### 🏭 行业过滤")
 selected_industries = st.sidebar.multiselect("行业 (留空全选):", options=ALL_INDUSTRIES, default=[])
@@ -466,7 +470,6 @@ if st.sidebar.button("🚀 启动战神扫描"):
     st.session_state['valid_options'] = opts
     st.session_state['alerts'] = al
 
-# 🔥🔥🔥 核心修复点1：找回了绿色横幅提示 🔥🔥🔥
 if st.session_state.get('alerts'): 
     names = "、".join(st.session_state['alerts'])
     st.success(f"🔥 发现 {len(st.session_state['alerts'])} 只【主力高控盘】标的：**{names}**")
@@ -496,11 +499,10 @@ if st.session_state.get('valid_options'):
     if st.button(f"🚀 立即分析 {target_name}"):
         with st.spinner("AI 正在深度运算..."):
             
-            # 🔥🔥🔥 核心修复点2：深度分析增加空值检查，防止TypeError 🔥🔥🔥
             df = engine.get_deep(target_code)
             rt = engine.get_realtime_quote(target_code)
             
-            if df is not None and not df.empty: # 加了非空检查
+            if df is not None and not df.empty:
                 if rt:
                     if str(df.iloc[-1]['date']) != str(rt['date']):
                          new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
