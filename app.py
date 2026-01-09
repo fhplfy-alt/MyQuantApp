@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V73 最终稳定版", 
+    page_title="V75 显形修复版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V73 智能量化系统 (独立连接·稳定内核)")
-st.caption("✅ 修复扫描秒退问题 | ✅ 强制独立登录 | ✅ 全功能保留")
+st.title("🛡️ V75 智能量化系统 (横幅显形·全功能)")
+st.caption("✅ 已修复顶部横幅不显示的问题 | ✅ V74内核")
 
 # ==========================================
 # 1. 安全导入
@@ -52,16 +52,6 @@ ACTION_TIP = """
 🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
 """
-
-STRATEGY_LOGIC = {
-    "🌤️ 首阳首板": "涨停后回调2-8天 + 不破支撑 + 今日收阳",
-    "🤐 极度缩量": "今日成交量 < 5日均量 * 0.6",
-    "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
-    "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
-    "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
-    "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
-    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
-}
 
 ALL_INDUSTRIES = [
     "农林牧渔", "采掘", "化工", "钢铁", "有色金属", "电子", "家用电器", "食品饮料", 
@@ -127,7 +117,6 @@ class QuantsEngine:
         bs.login()
         stocks = []
         try:
-            # 尝试多次获取全市场
             for i in range(5):
                 date = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 rs = bs.query_all_stock(day=date)
@@ -138,10 +127,7 @@ class QuantsEngine:
                     stocks = temp; break
         except: pass
         finally: bs.logout()
-        
-        # 🔥🔥🔥 核心修复：如果全市场获取失败（比如只有0只），强制使用指数保底
-        if len(stocks) < 100:
-             return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
+        if len(stocks) < 100: return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
         return stocks
 
     def get_index_stocks(self, index_type="zz500"):
@@ -180,7 +166,6 @@ class QuantsEngine:
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
 
-    # 🔥🔥🔥 核心修复：回归独立登录模式（最稳）🔥🔥🔥
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -189,11 +174,11 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        # ⚡ 独立登录：每只股票自己管自己，防止断连
+        # 独立登录 (最稳)
         bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
-            if rs_info.error_code != '0': raise Exception()
+            if rs_info.error_code != '0': return None 
             if rs_info.next():
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
@@ -214,7 +199,7 @@ class QuantsEngine:
             bs.logout()
             return None
         
-        bs.logout() # 正常退出
+        bs.logout()
 
         if not data: return None
         try:
@@ -235,11 +220,13 @@ class QuantsEngine:
 
         curr = df.iloc[-1]
         prev = df.iloc[-2]
-        
         if max_price and curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
-        
+        try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
+        except: ipo_date = datetime.datetime(2000, 1, 1)
+        days_listed = (datetime.datetime.now() - ipo_date).days
+
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
@@ -249,8 +236,7 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
-        # 战法判定
-        # 1. 首阳首板
+        # 战法
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         if not limit_ups.empty:
@@ -267,27 +253,20 @@ class QuantsEngine:
                         if vol_correction_avg < vol_limit:
                             signal_tags.append("🌤️首阳首板"); priority = 95; action = "STRONG BUY"
 
-        # 2. 极度缩量
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
         if curr['volume'] < vol_ma5 * 0.6: 
             signal_tags.append("🤐极度缩量"); priority = max(priority, 5)
 
-        # 3. 温和吸筹
         if all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62:
             signal_tags.append("🔴温和吸筹"); priority = max(priority, 60); action = "BUY (低吸)"
         
-        # 4. 换手锁仓
-        turn_val = df['turn'].iloc[-1] if df['turn'].iloc[-1] > 0 else df['turn'].iloc[-2]
-        prev_turn = df['turn'].iloc[-2]
-        if (turn_val > 5 and prev_turn > 5) and winner_rate > 70:
+        if (df['turn'].iloc[-1] > 5 and df['turn'].iloc[-2] > 5) and winner_rate > 70:
             signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
             
-        # 5. 妖股基因
         limit_60 = len(df.tail(60)[df.tail(60)['pctChg'] > 9.5])
         if limit_60 >= 3 and winner_rate > 80:
             signal_tags.append("🐲妖股基因"); priority = max(priority, 90); action = "STRONG BUY"
 
-        # 6. 四星共振
         has_limit_20 = len(df.tail(20)[df.tail(20)['pctChg'] > 9.5]) > 0
         is_double = curr['volume'] > prev['volume'] * 1.8
         is_red4 = (df['close'].tail(4) > df['open'].tail(4)).all()
@@ -312,28 +291,22 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 核心修复：扫描函数移除外层登录，只做循环 🔥🔥🔥
-    def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
+    def scan_market(self, code_list, max_p, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
+        lg = bs.login()
+        if lg.error_code != '0': return [],[],[]
         
-        # 1. 检查列表是否为空
-        if not code_list:
-            return [], [], [], None
-
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 独立连接模式...")
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
         
-        # 2. 循环处理 (无外层登录，防止假死)
-        total = len(code_list)
         for i, c in enumerate(code_list):
             if i % 2 == 0:
-                bar.progress((i+1)/total, f"分析中: {c} ({i}/{total}) | 命中: {len(results)} 只")
+                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)}) | 命中: {len(results)}")
             try:
-                # 随机延迟防封号
                 time.sleep(0.02)
-                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
+                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
@@ -341,6 +314,7 @@ class QuantsEngine:
             except: 
                 continue
 
+        bs.logout()
         bar.empty()
         return results, alerts, codes, market_status
 
@@ -453,7 +427,7 @@ class QuantsEngine:
 engine = QuantsEngine()
 
 st.sidebar.header("🕹️ 战神控制台")
-max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 500.0, 20.0)
+max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
 st.sidebar.markdown("#### 🏭 行业过滤")
 selected_industries = st.sidebar.multiselect("行业 (留空全选):", options=ALL_INDUSTRIES, default=[])
@@ -481,17 +455,24 @@ else:
 
 if st.sidebar.button("🚀 启动战神扫描"):
     res, al, opts, _ = engine.scan_market(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
+    
     st.session_state['res'] = res
     st.session_state['valid_options'] = opts
     st.session_state['alerts'] = al
 
-if st.session_state.get('al'): 
-    names = "、".join(st.session_state['al'])
-    st.success(f"🔥 发现 {len(st.session_state['al'])} 只龙头/首板标的：**{names}**")
+# 🔥🔥🔥 核心修复：在这里恢复了 alerts 的读取和显示 🔥🔥🔥
+if st.session_state.get('alerts'): 
+    names = "、".join(st.session_state['alerts'])
+    st.success(f"🔥 发现 {len(st.session_state['alerts'])} 只【主力高控盘】标的：**{names}**")
 
 with st.expander("📖 **策略逻辑白皮书 (透明度报告)**", expanded=False):
     st.markdown("##### 🔍 核心策略定义")
-    for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
+    st.markdown("- **🌤️ 首阳首板 (PDF核心)**: 涨停后回调2-8天 + 不破支撑 + 今日收阳")
+    st.markdown("- **🤐 极度缩量 (PDF核心)**: 今日成交量 < 5日均量 * 0.6 (主力洗盘)")
+    st.markdown("- **👑 四星共振**: 近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8")
+    st.markdown("- **🐲 妖股基因**: 近60日涨停≥3次 + 获利筹码>80% + 上市>30天")
+    st.markdown("- **🔥 换手锁仓**: 连续2日换手率>5% + 获利筹码>70%")
+    st.markdown("- **🔴 温和吸筹**: 3连阳且累计涨幅<5% + 获利筹码>62%")
 
 if st.session_state.get('res'):
     st.dataframe(pd.DataFrame(st.session_state['res']), use_container_width=True, 
@@ -504,19 +485,34 @@ if st.session_state.get('res'):
 
 st.divider()
 
+# 大盘风控放在这里
+market_info = engine.get_market_sentiment()
+if market_info:
+    c1, c2 = st.columns([1, 4])
+    c1.metric("上证指数", market_info['status'], delta_color="inverse")
+    if market_info['color'] == 'red':
+        c2.success(f"📈 策略建议：{market_info['status']}，建议仓位 {market_info['pos']}")
+    else:
+        c2.error(f"📉 策略建议：{market_info['status']}，风险高，建议仓位 {market_info['pos']}")
+
 if st.session_state.get('valid_options'):
     st.subheader("🧠 深度分析")
-    target = st.selectbox("选择目标", st.session_state['valid_options'])
-    if st.button(f"🚀 分析 {target}"):
-        code = target.split("|")[0].strip()
-        df = engine.get_deep(code)
-        rt = engine.get_realtime_quote(code)
-        
-        if df is not None:
-            if rt:
-                if str(df.iloc[-1]['date']) != str(rt['date']):
-                     new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
-                     df = pd.concat([df, new], ignore_index=True)
+    target = st.selectbox("选择目标进行深度分析", st.session_state['valid_options'])
+    
+    target_code = target.split("|")[0].strip()
+    target_name = target.split("|")[1].strip()
+
+    if st.button(f"🚀 立即分析 {target_name}"):
+        with st.spinner("AI 正在深度运算..."):
+            
+            df = engine.get_deep(target_code)
+            rt = engine.get_realtime_quote(target_code)
+            
+            if df is not None:
+                if rt:
+                    if str(df.iloc[-1]['date']) != str(rt['date']):
+                         new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
+                         df = pd.concat([df, new], ignore_index=True)
                 else:
                      df.at[df.index[-1], 'close'] = rt['close']
 
