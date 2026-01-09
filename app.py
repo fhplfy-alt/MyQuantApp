@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V76 稳定内核版", 
+    page_title="V77 深度修复版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V76 智能量化系统 (独立连接·永不假死)")
-st.caption("✅ 强制独立登录 | ✅ 修复瞬间完成Bug | ✅ 全功能保留")
+st.title("🛡️ V77 智能量化系统 (深度数据·暴力获取)")
+st.caption("✅ 已修复深度分析报错 | ✅ 强制5次重试 | ✅ 全功能保留")
 
 # ==========================================
 # 1. 安全导入
@@ -52,16 +52,6 @@ ACTION_TIP = """
 🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
 """
-
-STRATEGY_LOGIC = {
-    "🌤️ 首阳首板": "涨停后回调2-8天 + 不破支撑 + 今日收阳",
-    "🤐 极度缩量": "今日成交量 < 5日均量 * 0.6",
-    "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
-    "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
-    "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
-    "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
-    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
-}
 
 ALL_INDUSTRIES = [
     "农林牧渔", "采掘", "化工", "钢铁", "有色金属", "电子", "家用电器", "食品饮料", 
@@ -176,7 +166,6 @@ class QuantsEngine:
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
 
-    # 🔥🔥🔥 V76 核心回归：独立登录模式 (拒绝假死) 🔥🔥🔥
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -185,7 +174,6 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        # 强制每次独立登录！
         bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
@@ -210,7 +198,7 @@ class QuantsEngine:
             bs.logout()
             return None
         
-        bs.logout() # 每次都退出，确保不占端口
+        bs.logout()
 
         if not data: return None
         try:
@@ -245,7 +233,6 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
-        # 战法
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         if not limit_ups.empty:
@@ -302,24 +289,22 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 扫描逻辑：使用独立处理函数 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
+        lg = bs.login()
+        if lg.error_code != '0': return [],[],[]
         
-        # 获取大盘状态
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 独立连接模式...")
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
         
-        total = len(code_list)
         for i, c in enumerate(code_list):
             if i % 2 == 0:
-                bar.progress((i+1)/total, f"分析中: {c} ({i}/{total}) | 命中: {len(results)} 只")
+                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)})")
             try:
-                # 随机休息防封
                 time.sleep(0.01)
-                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
+                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
@@ -327,23 +312,42 @@ class QuantsEngine:
             except: 
                 continue
 
+        bs.logout()
         bar.empty()
         return results, alerts, codes, market_status
 
+    # 🔥🔥🔥 核心修复：深度分析暴力获取 (5次重试 + 错误日志) 🔥🔥🔥
     @st.cache_data(ttl=600)
     def get_deep(_self, code):
-        bs.login()
-        try:
-            end = datetime.datetime.now().strftime("%Y-%m-%d")
-            start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
-            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
-            data = [r for r in rs.get_data()]
-            bs.logout()
-            if not data: return None
-            return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
-        except:
-            bs.logout()
-            return None
+        for i in range(5): # 增加到5次重试
+            bs.login()
+            try:
+                end = datetime.datetime.now().strftime("%Y-%m-%d")
+                start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+                # 显式获取 pctChg
+                rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
+                
+                # 如果 rs 是 None 或者 error_code 不为 0
+                if not rs or rs.error_code != '0':
+                    bs.logout()
+                    time.sleep(0.5)
+                    continue
+
+                data = []
+                while rs.next():
+                    data.append(rs.get_row_data())
+                
+                bs.logout()
+                
+                if data: 
+                    df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"])
+                    return df.apply(pd.to_numeric, errors='coerce').dropna()
+                else:
+                    time.sleep(0.5)
+            except:
+                bs.logout()
+                time.sleep(0.5)
+        return None
 
     def run_ai_prediction(self, df):
         if len(df) < 30: return None
@@ -421,7 +425,7 @@ class QuantsEngine:
             name='K线', increasing_line_color='red', decreasing_line_color='green'
         ))
         fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
-        fig.add_trace(go.Scatter(x=df['date'], y=df['MA10'], name='MA10 (生命线)', line=dict(color='blue', width=2)))
+        fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
 
         if not buy_points.empty:
             fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
@@ -470,9 +474,9 @@ if st.sidebar.button("🚀 启动战神扫描"):
     st.session_state['valid_options'] = opts
     st.session_state['alerts'] = al
 
-if st.session_state.get('alerts'): 
-    names = "、".join(st.session_state['alerts'])
-    st.success(f"🔥 发现 {len(st.session_state['alerts'])} 只【主力高控盘】标的：**{names}**")
+if st.session_state.get('al'): 
+    names = "、".join(st.session_state['al'])
+    st.success(f"🔥 发现 {len(st.session_state['al'])} 只龙头/首板标的：**{names}**")
 
 with st.expander("📖 **策略逻辑白皮书 (透明度报告)**", expanded=False):
     st.markdown("##### 🔍 核心策略定义")
@@ -491,7 +495,7 @@ st.divider()
 
 if st.session_state.get('valid_options'):
     st.subheader("🧠 深度分析")
-    target = st.selectbox("选择目标进行深度分析", st.session_state['valid_options'])
+    target = st.selectbox("选择目标", st.session_state['valid_options'])
     
     target_code = target.split("|")[0].strip()
     target_name = target.split("|")[1].strip()
@@ -502,7 +506,7 @@ if st.session_state.get('valid_options'):
             df = engine.get_deep(target_code)
             rt = engine.get_realtime_quote(target_code)
             
-            if df is not None and not df.empty:
+            if df is not None:
                 if rt:
                     if str(df.iloc[-1]['date']) != str(rt['date']):
                          new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
@@ -536,7 +540,7 @@ if st.session_state.get('valid_options'):
                 st.plotly_chart(fig, use_container_width=True)
                 st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
             else:
-                 st.error("❌ 数据获取失败（可能是新股或暂停上市），请换一只试试。")
+                 st.error("❌ 数据获取失败（可能是网络超时），请重试。")
 
 # 研报
 st.sidebar.markdown("---")
