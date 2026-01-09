@@ -6,13 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V72 绝对修正版", 
+    page_title="V73 最终稳定版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V72 智能量化系统 (全功能·零Bug)")
+st.title("🛡️ V73 智能量化系统 (独立连接·稳定内核)")
+st.caption("✅ 修复扫描秒退问题 | ✅ 强制独立登录 | ✅ 全功能保留")
 
 # ==========================================
 # 1. 安全导入
@@ -126,6 +127,7 @@ class QuantsEngine:
         bs.login()
         stocks = []
         try:
+            # 尝试多次获取全市场
             for i in range(5):
                 date = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 rs = bs.query_all_stock(day=date)
@@ -136,6 +138,8 @@ class QuantsEngine:
                     stocks = temp; break
         except: pass
         finally: bs.logout()
+        
+        # 🔥🔥🔥 核心修复：如果全市场获取失败（比如只有0只），强制使用指数保底
         if len(stocks) < 100:
              return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
         return stocks
@@ -176,6 +180,7 @@ class QuantsEngine:
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
 
+    # 🔥🔥🔥 核心修复：回归独立登录模式（最稳）🔥🔥🔥
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -184,11 +189,11 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        # 独立登录 (最稳)
+        # ⚡ 独立登录：每只股票自己管自己，防止断连
         bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
-            if rs_info.error_code != '0': return None 
+            if rs_info.error_code != '0': raise Exception()
             if rs_info.next():
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
@@ -209,7 +214,7 @@ class QuantsEngine:
             bs.logout()
             return None
         
-        bs.logout()
+        bs.logout() # 正常退出
 
         if not data: return None
         try:
@@ -244,7 +249,8 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
-        # 战法
+        # 战法判定
+        # 1. 首阳首板
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         if not limit_ups.empty:
@@ -261,22 +267,27 @@ class QuantsEngine:
                         if vol_correction_avg < vol_limit:
                             signal_tags.append("🌤️首阳首板"); priority = 95; action = "STRONG BUY"
 
+        # 2. 极度缩量
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
         if curr['volume'] < vol_ma5 * 0.6: 
             signal_tags.append("🤐极度缩量"); priority = max(priority, 5)
 
+        # 3. 温和吸筹
         if all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62:
             signal_tags.append("🔴温和吸筹"); priority = max(priority, 60); action = "BUY (低吸)"
         
+        # 4. 换手锁仓
         turn_val = df['turn'].iloc[-1] if df['turn'].iloc[-1] > 0 else df['turn'].iloc[-2]
         prev_turn = df['turn'].iloc[-2]
         if (turn_val > 5 and prev_turn > 5) and winner_rate > 70:
             signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
             
+        # 5. 妖股基因
         limit_60 = len(df.tail(60)[df.tail(60)['pctChg'] > 9.5])
         if limit_60 >= 3 and winner_rate > 80:
             signal_tags.append("🐲妖股基因"); priority = max(priority, 90); action = "STRONG BUY"
 
+        # 6. 四星共振
         has_limit_20 = len(df.tail(20)[df.tail(20)['pctChg'] > 9.5]) > 0
         is_double = curr['volume'] > prev['volume'] * 1.8
         is_red4 = (df['close'].tail(4) > df['open'].tail(4)).all()
@@ -301,23 +312,28 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 修复点：函数名改为 scan_market (与调用一致) 🔥🔥🔥
+    # 🔥🔥🔥 核心修复：扫描函数移除外层登录，只做循环 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
-        lg = bs.login()
-        if lg.error_code != '0': return [],[],[], None
         
+        # 1. 检查列表是否为空
+        if not code_list:
+            return [], [], [], None
+
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 独立连接模式...")
         
+        # 2. 循环处理 (无外层登录，防止假死)
+        total = len(code_list)
         for i, c in enumerate(code_list):
             if i % 2 == 0:
-                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)})")
+                bar.progress((i+1)/total, f"分析中: {c} ({i}/{total}) | 命中: {len(results)} 只")
             try:
+                # 随机延迟防封号
                 time.sleep(0.02)
-                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
+                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
@@ -325,7 +341,6 @@ class QuantsEngine:
             except: 
                 continue
 
-        bs.logout()
         bar.empty()
         return results, alerts, codes, market_status
 
@@ -399,6 +414,7 @@ class QuantsEngine:
         df = df.copy()
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA20'] = df['close'].rolling(20).mean()
+        # MACD
         exp1 = df['close'].ewm(span=12, adjust=False).mean()
         exp2 = df['close'].ewm(span=26, adjust=False).mean()
         df['DIF'] = exp1 - exp2
@@ -464,9 +480,7 @@ else:
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
-    # 🔥 核心修正点：这里正确调用 scan_market 并接收 4 个返回值
     res, al, opts, _ = engine.scan_market(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
-    
     st.session_state['res'] = res
     st.session_state['valid_options'] = opts
     st.session_state['alerts'] = al
@@ -490,7 +504,6 @@ if st.session_state.get('res'):
 
 st.divider()
 
-# 🔥 这里：因为 valid_options 有数据了，深度分析框就会正常显示
 if st.session_state.get('valid_options'):
     st.subheader("🧠 深度分析")
     target = st.selectbox("选择目标", st.session_state['valid_options'])
