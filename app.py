@@ -6,13 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V103 修复版", 
+    page_title="V103 完美复刻版", 
     layout="wide", 
-    page_icon="🛡️",
+    page_icon="🚀",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V103 智能量化系统 (画图修复·全功能)")
+st.title("🚀 V103 智能量化系统 (全功能·界面找回)")
+st.caption("✅ 找回扫描结果横幅 | ✅ 找回悬停说明 | ✅ 找回策略白皮书")
 
 # ==========================================
 # 1. 安全导入
@@ -30,23 +31,39 @@ except ImportError as e:
     st.stop()
 
 # ==========================================
-# 0. 全局配置
+# 0. 全局配置 (你的图2和图3的内容)
 # ==========================================
+# 图2：悬停提示内容
 STRATEGY_TIP = """
-🌤️ 首阳首板: 涨停后缩量回调，今日再收阳 (N字反转)
-🤐 极度缩量: 量能萎缩至5日均量一半 (洗盘特征)
-👑 四星共振: [涨停+缺口+连阳+倍量] 最强主升
+👇 信号含义说明：
+👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足
 🐲 妖股基因: 60天内3板 + 筹码>80%
-🔥 换手锁仓: 高换手 + 高获利
+🔥 换手锁仓: 连续高换手 + 高获利
+🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中
+📈 多头排列: 股价收阳且重心上移
+🚀 金叉突变: 短期均线向上金叉长期均线
+⚡ 死叉/空头: 趋势向下或破位
 """
 
 ACTION_TIP = """
-🟥 STRONG BUY: 【重仓】四星共振/首阳首板
-🟧 BUY (博弈): 【激进】换手锁仓/接力
-🟨 BUY (低吸): 【潜伏】温和吸筹/缩量回踩
+👇 操作建议说明：
+🟥 STRONG BUY: 【重点关注】确定性极高
+🟧 BUY (博弈): 【激进买入】短线博弈
+🟨 BUY (低吸): 【稳健买入】逢低建仓
 🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
 """
+
+# 图3：白皮书内容
+STRATEGY_LOGIC = {
+    "🌤️ 首阳首板 (PDF核心)": "涨停后回调2-8天 + 不破支撑 + 今日收阳",
+    "🤐 极度缩量 (PDF核心)": "今日成交量 < 5日均量 * 0.6 (主力洗盘)",
+    "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
+    "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
+    "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
+    "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
+    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
+}
 
 ALL_INDUSTRIES = [
     "农林牧渔", "采掘", "化工", "钢铁", "有色金属", "电子", "家用电器", "食品饮料", 
@@ -56,7 +73,7 @@ ALL_INDUSTRIES = [
 ]
 
 # ==========================================
-# 2. 核心引擎
+# 2. 核心引擎 (纯东财版)
 # ==========================================
 class QuantsEngine:
     def __init__(self):
@@ -79,30 +96,17 @@ class QuantsEngine:
                 klines = data['data']['klines']
                 closes = [float(k.split(',')[1]) for k in klines]
                 df = pd.DataFrame({'close': closes})
+                
                 exp1 = df['close'].ewm(span=12, adjust=False).mean()
                 exp2 = df['close'].ewm(span=26, adjust=False).mean()
                 dif = exp1 - exp2
                 dea = dif.ewm(span=9, adjust=False).mean()
+                
                 if dif.iloc[-1] > dea.iloc[-1]:
                     return {"status": "强市 (金叉)", "color": "red", "pos": "80%"}
                 else:
                     return {"status": "弱市 (死叉)", "color": "green", "pos": "0-20%"}
         except: return None
-
-    def get_realtime_quote(self, code):
-        try:
-            clean_code = code.split('.')[-1]
-            market_id = "1" if code.startswith("sh") else "0"
-            url = f"https://push2.eastmoney.com/api/qt/stock/get?invt=2&fltt=2&fields=f43,f44,f45,f46,f47,f48,f60,f168,f170&secid={market_id}.{clean_code}"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=2) as f:
-                d = json.loads(f.read().decode('utf-8')).get('data')
-                if d:
-                    cp = float(d['f43'])
-                    if cp == 0: cp = float(d['f60'])
-                    return {'date': datetime.date.today().strftime("%Y-%m-%d"), 'open': float(d['f46']), 'pre_close': float(d['f60']), 'close': cp, 'high': float(d['f44']), 'low': float(d['f45']), 'volume': float(d['f47'])*100, 'turn': float(d['f168'])}
-        except: return None
-        return None
 
     def get_all_stocks(self):
         stocks = []
@@ -147,6 +151,13 @@ class QuantsEngine:
         profit_vol = df[df['close'] < current_price]['volume'].sum()
         return (profit_vol / total_vol) * 100
 
+    def calc_risk_level(self, price, ma5, ma20):
+        if ma5 == 0: return "未知"
+        bias = (price - ma5) / ma5 * 100
+        if bias > 15: return "High (高危)"
+        elif price < ma20: return "Med (破位)"
+        else: return "Low (安全)"
+
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         df = self.get_history_k_data(code, days=150)
         if df is None or len(df) < 30: return None
@@ -168,6 +179,7 @@ class QuantsEngine:
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
+        risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
 
         signal_tags = []
         priority = 0
@@ -182,10 +194,13 @@ class QuantsEngine:
             days_since = len(df) - 1 - last_limit_idx
             if 2 <= days_since <= 8:
                 if curr['close'] > curr['open']:
-                    min_low = df.iloc[last_limit_idx+1:-1]['low'].min()
-                    ma10 = df['MA10'].iloc[-1]
-                    if min_low >= ma10 * 0.98:
-                        signal_tags.append("🌤️首阳首板"); priority = 95; action = "STRONG BUY"
+                    min_low_during_correction = df.iloc[last_limit_idx+1:-1]['low'].min()
+                    ma10_support = df['MA10'].iloc[-1]
+                    if min_low_during_correction >= ma10_support * 0.98:
+                        vol_limit = limit_row['volume']
+                        vol_correction_avg = df.iloc[last_limit_idx+1:-1]['volume'].mean()
+                        if vol_correction_avg < vol_limit:
+                            signal_tags.append("🌤️首阳首板"); priority = 95; action = "STRONG BUY"
 
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
         if curr['volume'] < vol_ma5 * 0.6: 
@@ -218,7 +233,8 @@ class QuantsEngine:
             "result": {
                 "代码": code, "名称": name, "行业": industry, 
                 "现价": curr['close'], "涨跌": f"{curr['pctChg']:.2f}%", 
-                "获利筹码": winner_rate, "策略信号": " + ".join(signal_tags),
+                "获利筹码": winner_rate, "风险评级": risk_level,
+                "策略信号": " + ".join(signal_tags),
                 "综合评级": action, "priority": priority
             },
             "alert": f"{code}" if priority >= 90 else None,
@@ -268,22 +284,22 @@ class QuantsEngine:
         
         if slope > 0.05:
             hint_title = "🚀 上升通道加速中"
-            hint_desc = "惯性推演：股价将尝试冲击新高。"
-            action = "建议：坚定持有"
+            hint_desc = f"惯性推演：股价将在 **{future_dates[1]}** 尝试冲击 **¥{pred_prices[1]:.2f}**。"
+            action = "建议：坚定持有 / 逢低买入"
             color = "red"
         elif slope > 0:
             hint_title = "📈 震荡缓慢上行"
-            hint_desc = "趋势温和，预计小幅上涨。"
+            hint_desc = f"趋势温和，预计 **{future_dates[1]}** 到达 **¥{pred_prices[1]:.2f}**。"
             action = "建议：耐心持股"
             color = "red"
         elif slope < -0.05:
             hint_title = "📉 下跌趋势加速"
-            hint_desc = "空头较强，注意风险。"
+            hint_desc = f"空头较强，预计 **{future_dates[1]}** 回落至 **¥{pred_prices[1]:.2f}**。"
             action = "建议：反弹卖出"
             color = "green"
         else:
             hint_title = "⚖️ 横盘震荡"
-            hint_desc = "多空平衡，震荡为主。"
+            hint_desc = f"多空平衡，预计 **{future_dates[1]}** 在 **¥{pred_prices[1]:.2f}** 震荡。"
             action = "建议：观望"
             color = "blue"
 
@@ -297,18 +313,18 @@ class QuantsEngine:
             "color": color
         }
 
-    # 🔥🔥🔥 核心修复：确保画图前计算了指标 🔥🔥🔥
     def calc_indicators(self, df):
         df = df.copy()
         df['MA5'] = df['close'].rolling(5).mean()
-        df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
+        exp1 = df['close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['close'].ewm(span=26, adjust=False).mean()
+        df['DIF'] = exp1 - exp2
+        df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
+        df['MACD'] = 2 * (df['DIF'] - df['DEA'])
         return df
 
     def plot_professional_kline(self, df, title):
-        # 🔥 双重保险：画图前再算一遍，防止外部没调用
-        df = self.calc_indicators(df)
-        
         df['Signal'] = 0
         df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 
         df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 
@@ -322,7 +338,7 @@ class QuantsEngine:
             name='K线', increasing_line_color='red', decreasing_line_color='green'
         ))
         fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
-        fig.add_trace(go.Scatter(x=df['date'], y=df['MA10'], name='MA10', line=dict(color='blue', width=2)))
+        fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
 
         if not buy_points.empty:
             fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
@@ -339,7 +355,7 @@ class QuantsEngine:
 engine = QuantsEngine()
 
 st.sidebar.header("🕹️ 战神控制台")
-max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 500.0, 20.0)
+max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
 st.sidebar.markdown("#### 🏭 行业过滤")
 selected_industries = st.sidebar.multiselect("行业 (留空全选):", options=ALL_INDUSTRIES, default=[])
@@ -355,7 +371,7 @@ if mode == "手动输入":
     pool = target_pool_str.replace("，", ",").split(",")
 else:
     if st.sidebar.button("📥 加载全市场"):
-        with st.spinner("正在获取成分股..."):
+        with st.spinner("正在获取全市场名单..."):
             st.session_state['pool'] = engine.get_all_stocks()
             st.sidebar.success(f"已加载全量 {len(st.session_state['pool'])} 只")
     
@@ -372,24 +388,33 @@ if st.sidebar.button("🚀 启动战神扫描"):
     st.session_state['alerts'] = al
     st.session_state['market_status'] = ms
 
-market_info = st.session_state.get('market_status')
-if market_info:
+# 大盘风控
+if st.session_state.get('market_status'):
+    ms = st.session_state['market_status']
     c1, c2 = st.columns([1, 4])
-    c1.metric("上证指数", market_info['status'], delta_color="inverse")
-    if market_info['color'] == 'red':
-        c2.success(f"📈 策略建议：{market_info['status']}，建议仓位 {market_info['pos']}")
+    c1.metric("上证指数", ms['status'], delta_color="inverse")
+    if ms['color'] == 'red':
+        c2.success(f"📈 策略建议：{ms['status']}，建议仓位 {ms['pos']}")
     else:
-        c2.error(f"📉 策略建议：{market_info['status']}，风险高，建议仓位 {market_info['pos']}")
+        c2.error(f"📉 策略建议：{ms['status']}，风险高，建议仓位 {ms['pos']}")
 st.divider()
 
-if st.session_state.get('al'): 
-    names = "、".join(st.session_state['al'])
-    st.success(f"🔥 发现 {len(st.session_state['al'])} 只【主力高控盘】标的：**{names}**")
+# 🔥🔥🔥 1. 找回了绿色汇总横幅 🔥🔥🔥
+if st.session_state.get('alerts'): 
+    names = "、".join(st.session_state['alerts'])
+    st.success(f"🔥 发现 {len(st.session_state['alerts'])} 只【主力高控盘】标的：**{names}**")
+
+# 🔥🔥🔥 2. 找回了策略说明书 🔥🔥🔥
+with st.expander("📖 **策略逻辑白皮书 (透明度报告)**", expanded=False):
+    st.markdown("##### 🔍 核心策略定义")
+    for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
 
 if st.session_state.get('res'):
+    # 🔥🔥🔥 3. 找回了表格悬停提示 🔥🔥🔥
     st.dataframe(pd.DataFrame(st.session_state['res']), use_container_width=True, 
                  column_config={
                      "获利筹码": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
+                     "风险评级": st.column_config.TextColumn(help="基于乖离率计算"),
                      "策略信号": st.column_config.TextColumn(help=STRATEGY_TIP, width="large"),
                      "综合评级": st.column_config.TextColumn(help=ACTION_TIP, width="medium")
                  })
@@ -398,7 +423,7 @@ st.divider()
 
 if st.session_state.get('valid_options'):
     st.subheader("🧠 深度分析")
-    target = st.selectbox("选择目标", st.session_state['valid_options'])
+    target = st.selectbox("选择目标进行深度分析", st.session_state['valid_options'])
     
     target_code = target.split("|")[0].strip()
     target_name = target.split("|")[1].strip()
@@ -409,8 +434,7 @@ if st.session_state.get('valid_options'):
             df = engine.get_history_k_data(target_code, days=365)
             
             if df is not None and not df.empty:
-                # 🔥 调用计算
-                df = engine.calc_indicators(df)
+                df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
                 future_info = engine.run_ai_prediction(df)
                 
                 last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
@@ -443,7 +467,7 @@ if st.session_state.get('valid_options'):
                 st.plotly_chart(fig, use_container_width=True)
                 st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
             else:
-                 st.error("❌ 数据获取失败")
+                 st.error("❌ 数据获取失败（可能是新股或暂停上市），请换一只试试。")
 
 # 研报
 st.sidebar.markdown("---")
