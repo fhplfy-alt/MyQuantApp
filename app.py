@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V68 极速纠错版", 
+    page_title="V88 完美显形版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V68 智能量化系统 (极速扫描·防卡死)")
-st.caption("✅ 修复点击无反应 | ✅ 实时进度反馈 | ✅ 全功能")
+st.title("🛡️ V88 智能量化系统 (全功能·名字显形)")
+st.caption("✅ 已修复横幅名字显示 | ✅ 包含PDF战法 | ✅ 东方财富实时行情")
 
 # ==========================================
 # 1. 安全导入
@@ -47,7 +47,7 @@ STRATEGY_TIP = """
 
 ACTION_TIP = """
 🟥 STRONG BUY: 【重仓】四星共振/首阳首板
-🟧 BUY (博弈): 【激进】换手锁仓/接力
+🟧 BUY (博弈): 【激激】换手锁仓/接力
 🟨 BUY (低吸): 【潜伏】温和吸筹/缩量回踩
 🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
@@ -114,7 +114,7 @@ class QuantsEngine:
             if code.startswith("bj"): return None
             url = f"https://push2.eastmoney.com/api/qt/stock/get?invt=2&fltt=2&fields=f43,f44,f45,f46,f47,f48,f60,f168,f170&secid={market_id}.{clean_code}"
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=2) as f:
+            with urllib.request.urlopen(req, timeout=3) as f:
                 d = json.loads(f.read().decode('utf-8')).get('data')
                 if d:
                     cp = float(d['f43'])
@@ -184,7 +184,7 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        # 🔥 核心修复：每次独立登录，确保不卡死
+        # ⚡ 独立登录 (最稳方案)
         bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
@@ -247,6 +247,7 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
+        # 战法
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         if not limit_ups.empty:
@@ -303,22 +304,23 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 核心修复：强制单线程 + 移除外层登录 (防止死锁) 🔥🔥🔥
+    # 🔥🔥🔥 核心修复：扫描函数 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
+        lg = bs.login()
+        if lg.error_code != '0': return [],[],[]
         
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg})...")
-        total = len(code_list)
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
         
         for i, c in enumerate(code_list):
-            # 实时更新进度，确保你知道它在动
-            bar.progress((i+1)/total, f"分析中: {c} ({i+1}/{total}) | 命中: {len(results)} 只")
+            if i % 2 == 0:
+                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)}) | 命中: {len(results)} 只")
             try:
-                # 移除 time.sleep，全速运行，因为内部有独立登录保护
-                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
+                time.sleep(0.01)
+                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
@@ -326,6 +328,7 @@ class QuantsEngine:
             except: 
                 continue
 
+        bs.logout()
         bar.empty()
         return results, alerts, codes, market_status
 
@@ -464,14 +467,17 @@ else:
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
+    # 🔥🔥🔥 核心修复：正确调用 scan_market 并接收 4 个返回值 🔥🔥🔥
     res, al, opts, _ = engine.scan_market(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
+    
     st.session_state['res'] = res
-    st.session_state['valid_options'] = opts
+    st.session_state['valid_options'] = opts # 确保下拉框有数据
     st.session_state['alerts'] = al
 
-if st.session_state.get('al'): 
-    names = "、".join(st.session_state['al'])
-    st.success(f"🔥 发现 {len(st.session_state['al'])} 只【主力高控盘】标的：**{names}**")
+# 🔥🔥🔥 核心修复：找回绿色横幅显示 🔥🔥🔥
+if st.session_state.get('alerts'): 
+    names = "、".join(st.session_state['alerts'])
+    st.success(f"🔥 发现 {len(st.session_state['alerts'])} 只【主力高控盘】标的：**{names}**")
 
 with st.expander("📖 **策略逻辑白皮书 (透明度报告)**", expanded=False):
     st.markdown("##### 🔍 核心策略定义")
@@ -501,41 +507,41 @@ if st.session_state.get('valid_options'):
             df = engine.get_deep(target_code)
             rt = engine.get_realtime_quote(target_code)
             
-            if df is not None and not df.empty:
+            if df is not None:
                 if rt:
                     if str(df.iloc[-1]['date']) != str(rt['date']):
                          new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
                          df = pd.concat([df, new], ignore_index=True)
-                
-                df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
-                future_info = engine.run_ai_prediction(df)
-                
-                last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
-                if last_limit_idx:
-                    limit_row = df.loc[last_limit_idx]
-                    support_half = (limit_row['open'] + limit_row['close']) / 2
-                    wash_days = len(df) - 1 - last_limit_idx
-                    
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
-                    c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
-                    c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
-                    c4.metric("🚿 洗盘天数", f"{wash_days}天")
                 else:
-                    st.info("近期无涨停")
+                     df.at[df.index[-1], 'close'] = rt['close']
 
-                if future_info:
-                    st.markdown("---")
-                    if future_info['color'] == 'red':
-                        st.error(f"### {future_info['title']}\n{future_info['desc']}")
-                    else:
-                        st.info(f"### {future_info['title']}\n{future_info['desc']}")
-
-                fig = engine.plot_professional_kline(df, target.split("|")[1])
-                st.plotly_chart(fig, use_container_width=True)
-                st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
+            df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
+            future_info = engine.run_ai_prediction(df)
+            
+            last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
+            if last_limit_idx:
+                limit_row = df.loc[last_limit_idx]
+                support_half = (limit_row['open'] + limit_row['close']) / 2
+                wash_days = len(df) - 1 - last_limit_idx
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
+                c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
+                c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
+                c4.metric("🚿 洗盘天数", f"{wash_days}天")
             else:
-                 st.error("❌ 数据获取失败（可能是新股或暂停上市），请换一只试试。")
+                st.info("近期无涨停")
+
+            if future_info:
+                st.markdown("---")
+                if future_info['color'] == 'red':
+                    st.error(f"### {future_info['title']}\n{future_info['desc']}")
+                else:
+                    st.info(f"### {future_info['title']}\n{future_info['desc']}")
+
+            fig = engine.plot_professional_kline(df, target.split("|")[1])
+            st.plotly_chart(fig, use_container_width=True)
+            st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
 
 # 研报
 st.sidebar.markdown("---")
