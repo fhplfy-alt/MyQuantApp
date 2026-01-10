@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V81 最终修复版", 
+    page_title="V68 极速纠错版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V81 智能量化系统 (云端稳定内核)")
-st.caption("✅ 已修复扫描报错 | ✅ 包含所有战法 | ✅ 实时行情")
+st.title("🛡️ V68 智能量化系统 (极速扫描·防卡死)")
+st.caption("✅ 修复点击无反应 | ✅ 实时进度反馈 | ✅ 全功能")
 
 # ==========================================
 # 1. 安全导入
@@ -184,9 +184,11 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
+        # 🔥 核心修复：每次独立登录，确保不卡死
+        bs.login()
         try:
             rs_info = bs.query_stock_basic(code=code)
-            if rs_info.error_code != '0': raise Exception("Lost")
+            if rs_info.error_code != '0': raise Exception()
             if rs_info.next():
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
@@ -196,12 +198,18 @@ class QuantsEngine:
             if rs_ind.next():
                 info['industry'] = rs_ind.get_row_data()[3] 
 
-            if not self.is_valid(code, info['name'], info['industry'], allow_kc, allow_bj, selected_industries): return None
+            if not self.is_valid(code, info['name'], info['industry'], allow_kc, allow_bj, selected_industries): 
+                bs.logout()
+                return None
 
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
             while rs.next(): data.append(rs.get_row_data())
+            
         except:
+            bs.logout()
             return None
+        
+        bs.logout()
 
         if not data: return None
         try:
@@ -226,7 +234,6 @@ class QuantsEngine:
         if max_price and curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
-        
         try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
         except: ipo_date = datetime.datetime(2000, 1, 1)
         days_listed = (datetime.datetime.now() - ipo_date).days
@@ -240,7 +247,6 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
-        # 战法
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         if not limit_ups.empty:
@@ -297,10 +303,9 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
+    # 🔥🔥🔥 核心修复：强制单线程 + 移除外层登录 (防止死锁) 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
-        lg = bs.login()
-        if lg.error_code != '0': return [],[],[], None
         
         market_status = self.get_market_sentiment()
         
@@ -309,15 +314,11 @@ class QuantsEngine:
         total = len(code_list)
         
         for i, c in enumerate(code_list):
-            if i % 10 == 0:
-                bar.progress((i+1)/total, f"分析中: {c} ({i}/{total}) | 命中: {len(results)} 只")
-                try: # 心跳
-                    bs.query_stock_basic("sh.600000")
-                except: 
-                    bs.logout(); time.sleep(0.5); bs.login()
-
+            # 实时更新进度，确保你知道它在动
+            bar.progress((i+1)/total, f"分析中: {c} ({i+1}/{total}) | 命中: {len(results)} 只")
             try:
-                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
+                # 移除 time.sleep，全速运行，因为内部有独立登录保护
+                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
@@ -325,25 +326,23 @@ class QuantsEngine:
             except: 
                 continue
 
-        bs.logout()
         bar.empty()
-        # 🔥🔥🔥 修复点：返回 4 个参数 🔥🔥🔥
         return results, alerts, codes, market_status
 
     @st.cache_data(ttl=600)
     def get_deep(_self, code):
-        for i in range(3):
-            bs.login()
-            try:
-                end = datetime.datetime.now().strftime("%Y-%m-%d")
-                start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
-                rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
-                data = [r for r in rs.get_data()]
-                bs.logout()
-                if data: 
-                    return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
-            except: bs.logout(); time.sleep(0.5)
-        return None
+        bs.login()
+        try:
+            end = datetime.datetime.now().strftime("%Y-%m-%d")
+            start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
+            data = [r for r in rs.get_data()]
+            bs.logout()
+            if not data: return None
+            return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
+        except:
+            bs.logout()
+            return None
 
     def run_ai_prediction(self, df):
         if len(df) < 30: return None
@@ -465,7 +464,6 @@ else:
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
-    # 🔥🔥🔥 修复调用，接收 4 个返回值 🔥🔥🔥
     res, al, opts, _ = engine.scan_market(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
     st.session_state['res'] = res
     st.session_state['valid_options'] = opts
@@ -503,7 +501,7 @@ if st.session_state.get('valid_options'):
             df = engine.get_deep(target_code)
             rt = engine.get_realtime_quote(target_code)
             
-            if df is not None:
+            if df is not None and not df.empty:
                 if rt:
                     if str(df.iloc[-1]['date']) != str(rt['date']):
                          new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
@@ -536,6 +534,8 @@ if st.session_state.get('valid_options'):
                 fig = engine.plot_professional_kline(df, target.split("|")[1])
                 st.plotly_chart(fig, use_container_width=True)
                 st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
+            else:
+                 st.error("❌ 数据获取失败（可能是新股或暂停上市），请换一只试试。")
 
 # 研报
 st.sidebar.markdown("---")
