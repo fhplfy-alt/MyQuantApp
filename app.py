@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V88 完美显形版", 
+    page_title="V89 强力稳健版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V88 智能量化系统 (全功能·名字显形)")
-st.caption("✅ 已修复横幅名字显示 | ✅ 包含PDF战法 | ✅ 东方财富实时行情")
+st.title("🛡️ V89 智能量化系统 (连接保活·防秒退)")
+st.caption("✅ 修复瞬间完成问题 | ✅ 长效连接机制 | ✅ 全功能保留")
 
 # ==========================================
 # 1. 安全导入
@@ -47,7 +47,7 @@ STRATEGY_TIP = """
 
 ACTION_TIP = """
 🟥 STRONG BUY: 【重仓】四星共振/首阳首板
-🟧 BUY (博弈): 【激激】换手锁仓/接力
+🟧 BUY (博弈): 【激进】换手锁仓/接力
 🟨 BUY (低吸): 【潜伏】温和吸筹/缩量回踩
 🟦 HOLD: 【持股】趋势完好
 ⬜ WAIT: 【观望】无机会
@@ -176,6 +176,7 @@ class QuantsEngine:
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
 
+    # 🔥🔥🔥 V89 修改：移除内部登录，纯逻辑处理，依赖外部连接 🔥🔥🔥
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -184,11 +185,12 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        # ⚡ 独立登录 (最稳方案)
-        bs.login()
+        # 此时假设外部已经 login
         try:
             rs_info = bs.query_stock_basic(code=code)
-            if rs_info.error_code != '0': raise Exception()
+            # 如果查询报错，说明连接断了，抛出异常让外层处理
+            if rs_info.error_code != '0': raise Exception("Lost")
+            
             if rs_info.next():
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
@@ -199,17 +201,13 @@ class QuantsEngine:
                 info['industry'] = rs_ind.get_row_data()[3] 
 
             if not self.is_valid(code, info['name'], info['industry'], allow_kc, allow_bj, selected_industries): 
-                bs.logout()
                 return None
 
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
             while rs.next(): data.append(rs.get_row_data())
             
         except:
-            bs.logout()
-            return None
-        
-        bs.logout()
+            raise Exception("Network Error") # 抛出给外层
 
         if not data: return None
         try:
@@ -234,10 +232,7 @@ class QuantsEngine:
         if max_price and curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
-        try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
-        except: ipo_date = datetime.datetime(2000, 1, 1)
-        days_listed = (datetime.datetime.now() - ipo_date).days
-
+        
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA10'] = df['close'].rolling(10).mean()
         df['MA20'] = df['close'].rolling(20).mean()
@@ -247,7 +242,7 @@ class QuantsEngine:
         priority = 0
         action = "WAIT"
 
-        # 战法
+        # 战法判定
         recent_days = df.iloc[-15:-1]
         limit_ups = recent_days[recent_days['pctChg'] > 9.5]
         if not limit_ups.empty:
@@ -304,29 +299,47 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 核心修复：扫描函数 🔥🔥🔥
+    # 🔥🔥🔥 核心修复：外层循环控制连接，断线自动重连 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
-        lg = bs.login()
-        if lg.error_code != '0': return [],[],[]
         
+        # 1. 检查列表是否为空
+        if not code_list:
+            st.error("⚠️ 股票池为空！请先点击【加载全市场】或手动输入代码。")
+            return [], [], [], None
+
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳健模式...")
         
+        # 2. 初始登录
+        lg = bs.login()
+        if lg.error_code != '0':
+            st.error("Baostock 登录失败，请检查网络！")
+            return [], [], []
+
+        total = len(code_list)
+        
+        # 3. 循环处理
         for i, c in enumerate(code_list):
             if i % 2 == 0:
-                bar.progress((i+1)/len(code_list), f"分析中: {c} ({i}/{len(code_list)}) | 命中: {len(results)} 只")
+                bar.progress((i+1)/total, f"分析中: {c} ({i+1}/{total}) | 命中: {len(results)} 只")
+            
             try:
+                # 随机延迟，防止被封
                 time.sleep(0.01)
-                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
+                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
                     codes.append(r["option"])
-            except: 
-                continue
+            except:
+                # 💥 如果遇到异常（说明连接断了），原地复活
+                bs.logout()
+                time.sleep(0.5)
+                bs.login() # 重新登录
+                continue # 尝试下一个
 
         bs.logout()
         bar.empty()
@@ -334,18 +347,19 @@ class QuantsEngine:
 
     @st.cache_data(ttl=600)
     def get_deep(_self, code):
-        bs.login()
-        try:
-            end = datetime.datetime.now().strftime("%Y-%m-%d")
-            start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
-            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
-            data = [r for r in rs.get_data()]
-            bs.logout()
-            if not data: return None
-            return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
-        except:
-            bs.logout()
-            return None
+        for i in range(3):
+            bs.login()
+            try:
+                end = datetime.datetime.now().strftime("%Y-%m-%d")
+                start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+                rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
+                data = [r for r in rs.get_data()]
+                bs.logout()
+                if data: 
+                    return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
+                time.sleep(0.5)
+            except: bs.logout(); time.sleep(0.5)
+        return None
 
     def run_ai_prediction(self, df):
         if len(df) < 30: return None
@@ -440,7 +454,7 @@ class QuantsEngine:
 engine = QuantsEngine()
 
 st.sidebar.header("🕹️ 战神控制台")
-max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 500.0, 20.0)
+max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
 st.sidebar.markdown("#### 🏭 行业过滤")
 selected_industries = st.sidebar.multiselect("行业 (留空全选):", options=ALL_INDUSTRIES, default=[])
@@ -467,14 +481,11 @@ else:
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
-    # 🔥🔥🔥 核心修复：正确调用 scan_market 并接收 4 个返回值 🔥🔥🔥
     res, al, opts, _ = engine.scan_market(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
-    
     st.session_state['res'] = res
-    st.session_state['valid_options'] = opts # 确保下拉框有数据
+    st.session_state['valid_options'] = opts
     st.session_state['alerts'] = al
 
-# 🔥🔥🔥 核心修复：找回绿色横幅显示 🔥🔥🔥
 if st.session_state.get('alerts'): 
     names = "、".join(st.session_state['alerts'])
     st.success(f"🔥 发现 {len(st.session_state['alerts'])} 只【主力高控盘】标的：**{names}**")
@@ -507,41 +518,41 @@ if st.session_state.get('valid_options'):
             df = engine.get_deep(target_code)
             rt = engine.get_realtime_quote(target_code)
             
-            if df is not None:
+            if df is not None and not df.empty:
                 if rt:
                     if str(df.iloc[-1]['date']) != str(rt['date']):
                          new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
                          df = pd.concat([df, new], ignore_index=True)
-                else:
-                     df.at[df.index[-1], 'close'] = rt['close']
-
-            df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
-            future_info = engine.run_ai_prediction(df)
-            
-            last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
-            if last_limit_idx:
-                limit_row = df.loc[last_limit_idx]
-                support_half = (limit_row['open'] + limit_row['close']) / 2
-                wash_days = len(df) - 1 - last_limit_idx
                 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
-                c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
-                c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
-                c4.metric("🚿 洗盘天数", f"{wash_days}天")
-            else:
-                st.info("近期无涨停")
-
-            if future_info:
-                st.markdown("---")
-                if future_info['color'] == 'red':
-                    st.error(f"### {future_info['title']}\n{future_info['desc']}")
+                df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
+                future_info = engine.run_ai_prediction(df)
+                
+                last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
+                if last_limit_idx:
+                    limit_row = df.loc[last_limit_idx]
+                    support_half = (limit_row['open'] + limit_row['close']) / 2
+                    wash_days = len(df) - 1 - last_limit_idx
+                    
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("当前价格", f"¥{df.iloc[-1]['close']:.2f}")
+                    c2.metric("🛡️ 首板1/2强支撑", f"¥{support_half:.2f}", help="跌破此位需止损")
+                    c3.metric("🔵 10日生命线", f"¥{df.iloc[-1]['MA10']:.2f}")
+                    c4.metric("🚿 洗盘天数", f"{wash_days}天")
                 else:
-                    st.info(f"### {future_info['title']}\n{future_info['desc']}")
+                    st.info("近期无涨停")
 
-            fig = engine.plot_professional_kline(df, target.split("|")[1])
-            st.plotly_chart(fig, use_container_width=True)
-            st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
+                if future_info:
+                    st.markdown("---")
+                    if future_info['color'] == 'red':
+                        st.error(f"### {future_info['title']}\n{future_info['desc']}")
+                    else:
+                        st.info(f"### {future_info['title']}\n{future_info['desc']}")
+
+                fig = engine.plot_professional_kline(df, target.split("|")[1])
+                st.plotly_chart(fig, use_container_width=True)
+                st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
+            else:
+                 st.error("❌ 数据获取失败（可能是新股或暂停上市），请换一只试试。")
 
 # 研报
 st.sidebar.markdown("---")
