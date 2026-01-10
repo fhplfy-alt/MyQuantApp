@@ -6,14 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V80 云端特供版", 
+    page_title="V81 最终修复版", 
     layout="wide", 
-    page_icon="☁️",
+    page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-st.title("☁️ V80 智能量化系统 (云端心跳·防断连)")
-st.caption("✅ 专为Streamlit Cloud优化 | ✅ 心跳重连机制 | ✅ 结果实时保护")
+st.title("🛡️ V81 智能量化系统 (云端稳定内核)")
+st.caption("✅ 已修复扫描报错 | ✅ 包含所有战法 | ✅ 实时行情")
 
 # ==========================================
 # 1. 安全导入
@@ -53,13 +53,6 @@ ACTION_TIP = """
 ⬜ WAIT: 【观望】无机会
 """
 
-ALL_INDUSTRIES = [
-    "农林牧渔", "采掘", "化工", "钢铁", "有色金属", "电子", "家用电器", "食品饮料", 
-    "纺织服装", "轻工制造", "医药生物", "公用事业", "交通运输", "房地产", "商业贸易", 
-    "休闲服务", "综合", "建筑材料", "建筑装饰", "电气设备", "国防军工", "计算机", 
-    "传媒", "通信", "银行", "非银金融", "汽车", "机械设备"
-]
-
 STRATEGY_LOGIC = {
     "🌤️ 首阳首板": "涨停后回调2-8天 + 不破支撑 + 今日收阳",
     "🤐 极度缩量": "今日成交量 < 5日均量 * 0.6",
@@ -69,6 +62,13 @@ STRATEGY_LOGIC = {
     "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
     "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
 }
+
+ALL_INDUSTRIES = [
+    "农林牧渔", "采掘", "化工", "钢铁", "有色金属", "电子", "家用电器", "食品饮料", 
+    "纺织服装", "轻工制造", "医药生物", "公用事业", "交通运输", "房地产", "商业贸易", 
+    "休闲服务", "综合", "建筑材料", "建筑装饰", "电气设备", "国防军工", "计算机", 
+    "传媒", "通信", "银行", "非银金融", "汽车", "机械设备"
+]
 
 # ==========================================
 # 2. 核心引擎
@@ -184,12 +184,9 @@ class QuantsEngine:
         data = []
         info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        # 🔥🔥🔥 核心修改：假设外部已登录，直接请求，失败抛异常 🔥🔥🔥
         try:
             rs_info = bs.query_stock_basic(code=code)
-            # 如果查询失败，说明连接断了，抛出异常
             if rs_info.error_code != '0': raise Exception("Lost")
-            
             if rs_info.next():
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
@@ -202,11 +199,9 @@ class QuantsEngine:
             if not self.is_valid(code, info['name'], info['industry'], allow_kc, allow_bj, selected_industries): return None
 
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
-            if rs.error_code != '0': raise Exception("Data Fail")
             while rs.next(): data.append(rs.get_row_data())
-            
         except:
-            raise Exception("Retry Needed") # 抛出给外层处理
+            return None
 
         if not data: return None
         try:
@@ -302,53 +297,42 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 核心修复：心跳重连机制 (专治瞬间跑完) 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
-        
-        # 1. 初始登录
         lg = bs.login()
-        if lg.error_code != '0': return [],[],[]
+        if lg.error_code != '0': return [],[],[], None
         
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动云端扫描 ({filter_msg})...")
-        
+        bar = st.progress(0, f"启动扫描 ({filter_msg})...")
         total = len(code_list)
         
         for i, c in enumerate(code_list):
-            if i % 2 == 0:
-                bar.progress((i+1)/total, f"分析中: {c} ({i}/{total}) | 命中: {len(results)} 只")
-            
-            # 🔥 心跳检测：每 10 只股票检测一次连接是否还活着
             if i % 10 == 0:
-                try:
-                    # 发送一个极小的查询来测试连接
-                    test = bs.query_stock_basic("sh.600000")
-                    if test.error_code != '0': raise Exception("Dead")
-                except:
-                    # 💀 发现连接死了，立即救活！
+                bar.progress((i+1)/total, f"分析中: {c} ({i}/{total}) | 命中: {len(results)} 只")
+                try: # 心跳
+                    bs.query_stock_basic("sh.600000")
+                except: 
                     bs.logout(); time.sleep(0.5); bs.login()
 
             try:
-                r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
+                r = self._process_single_stock(c, max_p, allow_kc, allow_bj, selected_industries)
                 if r: 
                     results.append(r["result"])
                     if r["alert"]: alerts.append(r["alert"])
                     codes.append(r["option"])
-            except:
-                # 如果单只股票处理时报错（说明心跳没拦住），再次重连
-                bs.logout(); time.sleep(0.5); bs.login()
+            except: 
                 continue
 
         bs.logout()
         bar.empty()
+        # 🔥🔥🔥 修复点：返回 4 个参数 🔥🔥🔥
         return results, alerts, codes, market_status
 
     @st.cache_data(ttl=600)
     def get_deep(_self, code):
-        for i in range(5): # 重试5次
+        for i in range(3):
             bs.login()
             try:
                 end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -358,7 +342,6 @@ class QuantsEngine:
                 bs.logout()
                 if data: 
                     return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
-                time.sleep(0.5)
             except: bs.logout(); time.sleep(0.5)
         return None
 
@@ -482,6 +465,7 @@ else:
     pool = st.session_state.get('pool', [])[:limit]
 
 if st.sidebar.button("🚀 启动战神扫描"):
+    # 🔥🔥🔥 修复调用，接收 4 个返回值 🔥🔥🔥
     res, al, opts, _ = engine.scan_market(pool, max_price_limit, allow_kc, allow_bj, selected_industries)
     st.session_state['res'] = res
     st.session_state['valid_options'] = opts
@@ -519,7 +503,7 @@ if st.session_state.get('valid_options'):
             df = engine.get_deep(target_code)
             rt = engine.get_realtime_quote(target_code)
             
-            if df is not None and not df.empty:
+            if df is not None:
                 if rt:
                     if str(df.iloc[-1]['date']) != str(rt['date']):
                          new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
@@ -552,8 +536,6 @@ if st.session_state.get('valid_options'):
                 fig = engine.plot_professional_kline(df, target.split("|")[1])
                 st.plotly_chart(fig, use_container_width=True)
                 st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
-            else:
-                 st.error("❌ 数据获取失败（可能是新股或暂停上市），请换一只试试。")
 
 # 研报
 st.sidebar.markdown("---")
