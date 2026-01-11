@@ -6,18 +6,48 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V120 最终稳定版", 
+    page_title="V121 商业加密版", 
     layout="wide", 
-    page_icon="🛡️",
+    page_icon="🔒",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ V120 智能量化系统 (独立连接·完整功能)")
-st.caption("✅ 修复秒退问题 | ✅ 绿色横幅回归 | ✅ 东方财富实时源")
+# 🔥🔥🔥 核心新增：密码保护模块 🔥🔥🔥
+def check_password():
+    """返回 True 如果密码正确，否则返回 False"""
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if st.session_state["password_correct"]:
+        return True
+
+    st.markdown("### 🔒 请输入访问密码")
+    password = st.text_input("Password", type="password")
+    
+    # ⬇️ 在这里设置你的密码 (比如 'vip888')
+    CORRECT_PASSWORD = "vip888" 
+
+    if st.button("登录"):
+        if password == CORRECT_PASSWORD:
+            st.session_state["password_correct"] = True
+            st.rerun()
+        else:
+            st.error("❌ 密码错误，请联系管理员获取权限。")
+            
+    st.info("💡 提示：本系统仅限 VIP 用户使用")
+    return False
+
+if not check_password():
+    st.stop() # 如果密码不对，直接停止运行下面的代码
 
 # ==========================================
-# 1. 安全导入
+# 🔓 密码验证通过后，才显示下面的内容
 # ==========================================
+
+st.title("🛡️ V121 智能量化系统 (VIP 尊享版)")
+st.caption("✅ 登录成功 | ✅ 独立连接 | ✅ 全功能开启")
+
+# (以下是 V120 的完整代码，保持不变)
 try:
     import plotly.graph_objects as go
     import baostock as bs
@@ -32,9 +62,6 @@ except ImportError as e:
     st.error(f"❌ 缺少库: {e}")
     st.stop()
 
-# ==========================================
-# 0. 全局配置
-# ==========================================
 bs_lock = threading.Lock()
 
 STRATEGY_TIP = """
@@ -70,9 +97,6 @@ ALL_INDUSTRIES = [
     "传媒", "通信", "银行", "非银金融", "汽车", "机械设备"
 ]
 
-# ==========================================
-# 2. 核心引擎
-# ==========================================
 class QuantsEngine:
     def __init__(self):
         pass
@@ -86,7 +110,6 @@ class QuantsEngine:
         return code
 
     def get_market_sentiment(self):
-        # 独立登录，防止断连
         bs.login()
         try:
             end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -125,45 +148,31 @@ class QuantsEngine:
         return None
 
     def get_all_stocks(self):
-        # 优先用东财，防止Baostock登录失败
+        bs.login()
         stocks = []
         try:
-            url = "http://82.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=5000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=5) as f:
-                data = json.loads(f.read().decode('utf-8'))
-                if data and 'data' in data and 'diff' in data['data']:
-                    for item in data['data']['diff']:
-                        mk = "sh" if item['f12'].startswith('6') else "sz"
-                        stocks.append(f"{mk}.{item['f12']}")
+            for i in range(5):
+                date = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+                rs = bs.query_all_stock(day=date)
+                temp = []
+                while rs.next():
+                    if rs.get_row_data()[1] == '1': temp.append(rs.get_row_data()[0])
+                if len(temp) > 1000:
+                    stocks = temp; break
         except: pass
-        if len(stocks) > 100: return stocks
-        
-        # 保底
+        finally: bs.logout()
+        if len(stocks) < 100: return self.get_index_stocks("hs300") + self.get_index_stocks("zz500")
+        return stocks
+
+    def get_index_stocks(self, index_type="zz500"):
         bs.login()
+        stocks = []
         try:
-            rs = bs.query_zz500_stocks()
+            rs = bs.query_zz500_stocks() if index_type == "zz500" else bs.query_hs300_stocks()
             while rs.next(): stocks.append(rs.get_row_data()[1])
         except: pass
         finally: bs.logout()
         return stocks
-
-    def get_history_k_eastmoney(self, code, days=365):
-        try:
-            clean = code.split('.')[-1]
-            mk = "1" if code.startswith("sh") else "0"
-            url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={mk}.{clean}&fields1=f1&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt={days}"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=3) as f:
-                data = json.loads(f.read().decode('utf-8'))
-                if data and 'data' in data and 'klines' in data['data']:
-                    rows = []
-                    for k in data['data']['klines']:
-                        s = k.split(',')
-                        rows.append({'date':s[0], 'open':float(s[1]), 'close':float(s[2]), 'high':float(s[3]), 'low':float(s[4]), 'volume':float(s[5]), 'turn':float(s[8]), 'pctChg':float(s[10])})
-                    return pd.DataFrame(rows)
-        except: return None
-        return None
 
     def is_valid(self, code, name, industry, allow_kc, allow_bj, selected_industries):
         if "ST" in name: return False
@@ -191,33 +200,46 @@ class QuantsEngine:
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
 
-    # 🔥🔥🔥 核心回归：独立登录模式 (拒绝假死) 🔥🔥🔥
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
         code = self.clean_code(code)
+        end = datetime.datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
         
-        # 1. 优先获取K线 (东财，无需登录，快且稳)
-        df = self.get_history_k_eastmoney(code, days=150)
-        if df is None or len(df) < 30: return None
+        data = []
+        info = {'name': code, 'industry': '未分类', 'ipoDate': '2000-01-01'}
         
-        name = code 
-        industry = "未知"
-        
-        # 2. 尝试获取名字 (Baostock, 独立登录)
+        bs.login()
         try:
-            bs.login() # 每次都登录
             rs_info = bs.query_stock_basic(code=code)
-            if rs_info.next(): name = rs_info.get_row_data()[1]
+            if rs_info.error_code != '0': raise Exception()
+            if rs_info.next():
+                row = rs_info.get_row_data()
+                info['name'] = row[1]
+                info['ipoDate'] = row[2]
+            
             rs_ind = bs.query_stock_industry(code)
-            if rs_ind.next(): industry = rs_ind.get_row_data()[3]
-            bs.logout() # 每次都退出
-        except: 
+            if rs_ind.next():
+                info['industry'] = rs_ind.get_row_data()[3] 
+
+            if not self.is_valid(code, info['name'], info['industry'], allow_kc, allow_bj, selected_industries): 
+                bs.logout()
+                return None
+
+            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
+            while rs.next(): data.append(rs.get_row_data())
+            
+        except:
             bs.logout()
-            # 如果名字获取失败，用代码代替，但数据不丢
+            return None
         
-        # 3. 过滤
-        if not self.is_valid(code, name, industry, allow_kc, allow_bj, selected_industries): return None
-        
-        # 4. 实时数据拼接
+        bs.logout()
+
+        if not data: return None
+        try:
+            df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"]).apply(pd.to_numeric, errors='coerce')
+        except: return None
+        if len(df) < 60: return None
+
         rt = self.get_realtime_quote(code)
         if rt and rt['close'] > 0:
             if str(df.iloc[-1]['date']) != str(rt['date']):
@@ -231,6 +253,7 @@ class QuantsEngine:
 
         curr = df.iloc[-1]
         prev = df.iloc[-2]
+        
         if max_price and curr['close'] > max_price: return None
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
@@ -290,28 +313,29 @@ class QuantsEngine:
 
         return {
             "result": {
-                "代码": code, "名称": name, "行业": industry, 
+                "代码": code, "名称": info['name'], "行业": info['industry'], 
                 "现价": curr['close'], "涨跌": f"{curr['pctChg']:.2f}%", 
                 "获利筹码": winner_rate, "风险评级": risk_level,
                 "策略信号": " + ".join(signal_tags),
                 "综合评级": action, "priority": priority
             },
-            "alert": f"{name}" if priority >= 90 else None,
-            "option": f"{code} | {name}"
+            "alert": f"{info['name']}" if priority >= 90 else None,
+            "option": f"{code} | {info['name']}"
         }
 
-    # 🔥🔥🔥 核心：移除外层登录，循环内全权负责 🔥🔥🔥
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
+        lg = bs.login()
+        if lg.error_code != '0': return [],[],[], None
         
         market_status = self.get_market_sentiment()
+        
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg})...")
-        total = len(code_list)
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
         
         for i, c in enumerate(code_list):
-            if i % 5 == 0:
-                bar.progress((i+1)/total, f"分析中: {c} | 命中: {len(results)} 只")
+            if i % 10 == 0:
+                bar.progress((i+1)/len(code_list), f"分析中: {c} | 命中: {len(results)} 只")
             try:
                 time.sleep(0.01)
                 r = self._process_single_stock(c, max_price, allow_kc, allow_bj, selected_industries)
@@ -322,13 +346,24 @@ class QuantsEngine:
             except: 
                 continue
 
+        bs.logout()
         bar.empty()
         return results, alerts, codes, market_status
 
     @st.cache_data(ttl=600)
     def get_deep(_self, code):
-        # 深度分析优先东财
-        return _self.get_history_k_eastmoney(code, days=365)
+        bs.login()
+        try:
+            end = datetime.datetime.now().strftime("%Y-%m-%d")
+            start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pctChg", start_date=start, end_date=end, frequency="d", adjustflag="3")
+            data = [r for r in rs.get_data()]
+            bs.logout()
+            if not data: return None
+            return pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pctChg"]).apply(pd.to_numeric, errors='coerce').dropna()
+        except:
+            bs.logout()
+            return None
 
     def run_ai_prediction(self, df):
         if len(df) < 30: return None
@@ -348,6 +383,7 @@ class QuantsEngine:
             future_dates.append(d.strftime("%Y-%m-%d"))
 
         slope = model.coef_[0]
+        last_price = df['close'].iloc[-1]
         
         if slope > 0.05:
             hint_title = "🚀 上升通道加速中"
@@ -388,9 +424,6 @@ class QuantsEngine:
         return df
 
     def plot_professional_kline(self, df, title):
-        # 强制计算指标
-        df = self.calc_indicators(df)
-        
         df['Signal'] = 0
         df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 
         df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 
@@ -404,7 +437,7 @@ class QuantsEngine:
             name='K线', increasing_line_color='red', decreasing_line_color='green'
         ))
         fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
-        fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
+        fig.add_trace(go.Scatter(x=df['date'], y=df['MA10'], name='MA10', line=dict(color='blue', width=1)))
 
         if not buy_points.empty:
             fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
@@ -415,13 +448,10 @@ class QuantsEngine:
         fig.update_layout(title=f"{title} - 智能操盘K线 (含B/S点)", xaxis_rangeslider_visible=False, height=600)
         return fig
 
-# ==========================================
-# 3. 界面 UI
-# ==========================================
 engine = QuantsEngine()
 
 st.sidebar.header("🕹️ 战神控制台")
-max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
+max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 500.0, 20.0)
 
 st.sidebar.markdown("#### 🏭 行业过滤")
 selected_industries = st.sidebar.multiselect("行业 (留空全选):", options=ALL_INDUSTRIES, default=[])
@@ -437,7 +467,7 @@ if mode == "手动输入":
     pool = target_pool_str.replace("，", ",").split(",")
 else:
     if st.sidebar.button("📥 加载全市场"):
-        with st.spinner("正在获取全市场名单..."):
+        with st.spinner("正在遍历交易所数据库..."):
             st.session_state['pool'] = engine.get_all_stocks()
             st.sidebar.success(f"已加载全量 {len(st.session_state['pool'])} 只")
     
@@ -503,7 +533,7 @@ if st.session_state.get('valid_options'):
                          new = pd.DataFrame([{"date":rt['date'], "open":rt['open'], "close":rt['close'], "high":rt['high'], "low":rt['low'], "volume":rt['volume'], "peTTM":0, "pctChg": 0}])
                          df = pd.concat([df, new], ignore_index=True)
                 
-                df = engine.calc_indicators(df)
+                df['MA5'] = df['close'].rolling(5).mean(); df['MA10'] = df['close'].rolling(10).mean()
                 future_info = engine.run_ai_prediction(df)
                 
                 last_limit_idx = df[df['pctChg'] > 9.5].last_valid_index()
@@ -536,7 +566,7 @@ if st.session_state.get('valid_options'):
                 st.plotly_chart(fig, use_container_width=True)
                 st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
             else:
-                 st.error("❌ 数据获取失败")
+                 st.error("❌ 数据获取失败（可能是新股或暂停上市），请换一只试试。")
 
 # 研报
 st.sidebar.markdown("---")
