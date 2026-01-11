@@ -6,34 +6,14 @@ import datetime
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
-    page_title="V125 强力加载版", 
+    page_title="V103 完美复刻版", 
     layout="wide", 
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-# 密码保护
-def check_password():
-    if "password_correct" not in st.session_state:
-        st.session_state["password_correct"] = False
-    if st.session_state["password_correct"]:
-        return True
-    st.markdown("### 🔒 请输入访问密码")
-    password = st.text_input("Password", type="password")
-    CORRECT_PASSWORD = "vip888" 
-    if st.button("登录"):
-        if password == CORRECT_PASSWORD:
-            st.session_state["password_correct"] = True
-            st.rerun()
-        else:
-            st.error("❌ 密码错误")
-    return False
-
-if not check_password():
-    st.stop()
-
-st.title("🛡️ V125 智能量化系统 (三重保险·名单必达)")
-st.caption("✅ 修复加载0只问题 | ✅ 增加浏览器伪装 | ✅ 多源自动切换")
+st.title("🛡️ V103 智能量化系统 (中文修复·全功能)")
+st.caption("✅ 已修复名称/行业显示 | ✅ 找回绿色汇总横幅 | ✅ 秒级实时行情")
 
 # ==========================================
 # 1. 安全导入
@@ -99,11 +79,29 @@ class QuantsEngine:
 
     def clean_code(self, code):
         code = str(code).strip()
+        # 东财格式转换
         clean = code.split('.')[-1]
         if code.startswith('sh') or code.startswith('6'):
             return f"1.{clean}"
         else:
             return f"0.{clean}"
+
+    # 混合模式：用 Baostock 查名字 (解决“未知”问题)
+    def get_stock_info(self, code):
+        name = code
+        industry = "未知"
+        try:
+            bs.login()
+            rs = bs.query_stock_basic(code=code)
+            if rs.error_code == '0' and rs.next():
+                name = rs.get_row_data()[1] # 中文名
+            rs_ind = bs.query_stock_industry(code)
+            if rs_ind.error_code == '0' and rs_ind.next():
+                industry = rs_ind.get_row_data()[3] # 行业名
+            bs.logout()
+        except:
+            bs.logout()
+        return name, industry
 
     def get_market_sentiment(self):
         try:
@@ -124,64 +122,12 @@ class QuantsEngine:
                     return {"status": "弱市 (死叉)", "color": "green", "pos": "0-20%"}
         except: return None
 
-    # 🔥🔥🔥 核心修复：带伪装的全市场获取函数 🔥🔥🔥
-    def get_all_stocks(self):
-        stocks = []
-        # 伪装成浏览器，防止被墙
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # 方案 A: 东方财富主接口
-        try:
-            url = "http://82.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=6000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=5) as f:
-                data = json.loads(f.read().decode('utf-8'))
-                if data and 'data' in data and 'diff' in data['data']:
-                    for item in data['data']['diff']:
-                        mk = "sh" if item['f12'].startswith('6') else "sz"
-                        stocks.append(f"{mk}.{item['f12']}")
-        except Exception as e:
-            pass # A计划失败，静默转B计划
-
-        if len(stocks) > 1000: return stocks
-
-        # 方案 B: 东方财富备用接口
-        try:
-            url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=6000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=5) as f:
-                data = json.loads(f.read().decode('utf-8'))
-                if data and 'data' in data and 'diff' in data['data']:
-                    for item in data['data']['diff']:
-                        mk = "sh" if item['f12'].startswith('6') else "sz"
-                        stocks.append(f"{mk}.{item['f12']}")
-        except: pass
-
-        if len(stocks) > 1000: return stocks
-
-        # 方案 C: Baostock 保底 (最后的防线)
-        try:
-            bs.login()
-            date = datetime.datetime.now().strftime("%Y-%m-%d")
-            rs = bs.query_all_stock(day=date)
-            while rs.next():
-                if rs.get_row_data()[1] == '1':
-                    stocks.append(rs.get_row_data()[0])
-            bs.logout()
-        except: 
-            bs.logout()
-            
-        return stocks
-
-    # 获取实时行情
     def get_realtime_quote(self, code):
         try:
             clean = code.split('.')[-1]
             mk = "1" if code.startswith("sh") else "0"
             url = f"https://push2.eastmoney.com/api/qt/stock/get?invt=2&fltt=2&fields=f43,f44,f45,f46,f47,f48,f60,f168,f170&secid={mk}.{clean}"
-            req = urllib.request.Request(url) # 简单请求即可
+            req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=2) as f:
                 d = json.loads(f.read().decode('utf-8')).get('data')
                 if d:
@@ -191,7 +137,40 @@ class QuantsEngine:
         except: return None
         return None
 
-    # 东财获取历史K线
+    def get_all_stocks(self):
+        stocks = []
+        try:
+            url = "http://82.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=5000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5) as f:
+                data = json.loads(f.read().decode('utf-8'))
+                if data and 'data' in data and 'diff' in data['data']:
+                    for item in data['data']['diff']:
+                        mk = "sh" if item['f12'].startswith('6') else "sz"
+                        stocks.append(f"{mk}.{item['f12']}")
+        except: pass
+        if len(stocks) > 100: return stocks
+        
+        # 保底
+        bs.login()
+        try:
+            rs = bs.query_zz500_stocks()
+            while rs.next(): stocks.append(rs.get_row_data()[1])
+        except: pass
+        finally: bs.logout()
+        return stocks
+
+    def get_index_stocks(self, index_type="zz500"):
+        bs.login()
+        stocks = []
+        try:
+            rs = bs.query_zz500_stocks() if index_type == "zz500" else bs.query_hs300_stocks()
+            while rs.next(): stocks.append(rs.get_row_data()[1])
+        except: pass
+        finally: bs.logout()
+        return stocks
+
+    # 东财 K 线
     @st.cache_data(ttl=600)
     def get_history_k_eastmoney(_self, code, days=365):
         try:
@@ -213,6 +192,18 @@ class QuantsEngine:
         except: return None
         return None
 
+    def is_valid(self, code, name, industry, allow_kc, allow_bj, selected_industries):
+        if "ST" in name: return False
+        if "sh.688" in code and not allow_kc: return False
+        if ("bj." in code or code.startswith("sz.8")) and not allow_bj: return False
+        if selected_industries:
+            is_match = False
+            for ind in selected_industries:
+                if ind in str(industry):
+                    is_match = True; break
+            if not is_match: return False
+        return True
+
     def calc_winner_rate(self, df, current_price):
         if df.empty: return 0.0
         total_vol = df['volume'].sum()
@@ -228,36 +219,16 @@ class QuantsEngine:
         else: return "Low (安全)"
 
     def _process_single_stock(self, code, max_price, allow_kc, allow_bj, selected_industries):
-        code = self.clean_code(code)
-        # 1. K线
+        # 1. 优先获取K线 (东财)
         df = self.get_history_k_eastmoney(code, days=150)
         if df is None or len(df) < 30: return None
         
-        # 2. 名字行业
-        name = code
-        industry = "未知"
-        try:
-            bs.login()
-            rs = bs.query_stock_basic(code=code)
-            if rs.next(): name = rs.get_row_data()[1]
-            rs_ind = bs.query_stock_industry(code)
-            if rs_ind.next(): industry = rs_ind.get_row_data()[3]
-            bs.logout()
-        except: bs.logout()
+        # 🔥🔥🔥 核心修复：找回中文名和行业 🔥🔥🔥
+        name, industry = self.get_stock_info(code)
 
         # 3. 过滤
-        if "ST" in name: return None
-        if "sh.688" in code and not allow_kc: return None
-        if ("bj." in code or code.startswith("sz.8")) and not allow_bj: return None
-        
-        if selected_industries:
-            is_match = False
-            for ind in selected_industries:
-                if ind in str(industry):
-                    is_match = True; break
-            if not is_match: return None
+        if not self.is_valid(code, name, industry, allow_kc, allow_bj, selected_industries): return None
 
-        # 4. 实时数据
         rt = self.get_realtime_quote(code)
         if rt and rt['close'] > 0:
             if str(df.iloc[-1]['date']) != str(rt['date']):
@@ -309,7 +280,7 @@ class QuantsEngine:
         if all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62:
             signal_tags.append("🔴温和吸筹"); priority = max(priority, 60); action = "BUY (低吸)"
         
-        turn_val = df['turn'].iloc[-1]
+        turn_val = df['turn'].iloc[-1] if df['turn'].iloc[-1] > 0 else df['turn'].iloc[-2]
         prev_turn = df['turn'].iloc[-2]
         if (turn_val > 5 and prev_turn > 5) and winner_rate > 70:
             signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
@@ -343,10 +314,11 @@ class QuantsEngine:
 
     def scan_market(self, code_list, max_price, allow_kc, allow_bj, selected_industries):
         results, alerts, codes = [], [], []
+        
         market_status = self.get_market_sentiment()
         
         filter_msg = f"全行业..." if not selected_industries else f"指定: {','.join(selected_industries)}"
-        bar = st.progress(0, f"启动扫描 ({filter_msg})...")
+        bar = st.progress(0, f"启动扫描 ({filter_msg}) - 稳定模式...")
         
         for i, c in enumerate(code_list):
             if i % 5 == 0:
@@ -366,6 +338,7 @@ class QuantsEngine:
 
     @st.cache_data(ttl=600)
     def get_deep(_self, code):
+        # 深度分析优先东财
         return _self.get_history_k_eastmoney(code, days=365)
 
     def run_ai_prediction(self, df):
@@ -440,7 +413,7 @@ class QuantsEngine:
             name='K线', increasing_line_color='red', decreasing_line_color='green'
         ))
         fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
-        fig.add_trace(go.Scatter(x=df['date'], y=df['MA10'], name='MA10', line=dict(color='blue', width=1)))
+        fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
 
         if not buy_points.empty:
             fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
@@ -475,12 +448,7 @@ else:
     if st.sidebar.button("📥 加载全市场"):
         with st.spinner("正在获取全市场名单..."):
             st.session_state['pool'] = engine.get_all_stocks()
-            pool_size = len(st.session_state['pool'])
-            # 🔥 修复提示逻辑
-            if pool_size > 0:
-                st.sidebar.success(f"✅ 已加载 {pool_size} 只股票")
-            else:
-                st.sidebar.error("❌ 加载失败，请重试")
+            st.sidebar.success(f"已加载全量 {len(st.session_state['pool'])} 只")
     
     if 'pool' in st.session_state:
         pool_len = len(st.session_state['pool'])
@@ -507,6 +475,7 @@ if st.session_state.get('market_status'):
 st.divider()
 
 if st.session_state.get('al'): 
+    # 🔥🔥🔥 修复点：这里会自动显示中文名 🔥🔥🔥
     names = "、".join(st.session_state['al'])
     st.success(f"🔥 发现 {len(st.session_state['al'])} 只【主力高控盘】标的：**{names}**")
 
@@ -573,7 +542,7 @@ if st.session_state.get('valid_options'):
                     for i in range(3):
                         d_cols[i].metric(label=future_info['dates'][i], value=f"¥{future_info['prices'][i]:.2f}", delta="预测", delta_color="inverse")
 
-                fig = engine.plot_professional_kline(df, target_name)
+                fig = engine.plot_professional_kline(df, target.split("|")[1])
                 st.plotly_chart(fig, use_container_width=True)
                 st.success("✅ **战法解析**：请重点关注 **蓝色10日线** 与 **1/2支撑位**。")
             else:
