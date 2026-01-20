@@ -62,13 +62,12 @@ STRATEGY_LOGIC = {
 }
 
 # ==========================================
-# 2. 核心引擎 (支持6000股扫描)
+# 2. 核心引擎 (V44 稳定内核保持不变，增加6000股支持)
 # ==========================================
 class QuantsEngine:
     def __init__(self):
-        self.MAX_SCAN_LIMIT = 6000  # 最大扫描数量提升到6000
-        self.BATCH_SIZE = 100  # 批次大小，避免内存溢出
-        
+        self.MAX_SCAN_LIMIT = 6000  # 增加最大扫描限制
+    
     def clean_code(self, code):
         code = str(code).strip()
         if not (code.startswith('sh.') or code.startswith('sz.')):
@@ -82,12 +81,11 @@ class QuantsEngine:
         return True
 
     def get_all_stocks(self):
-        """获取全市场股票，支持6000只"""
+        """获取全市场股票，最多6000只"""
         try:
             bs.login()
             rs = bs.query_all_stock()
             stocks = []
-            
             data_list = []
             while (rs.error_code == '0') & rs.next():
                 data_list.append(rs.get_row_data())
@@ -100,7 +98,7 @@ class QuantsEngine:
                         stocks.append(code)
             
             bs.logout()
-            return stocks[:self.MAX_SCAN_LIMIT]  # 限制在6000只以内
+            return stocks[:self.MAX_SCAN_LIMIT]
         except:
             try:
                 bs.logout()
@@ -109,33 +107,15 @@ class QuantsEngine:
             return []
 
     def get_index_stocks(self, index_type="zz500"):
-        """获取指数成分股，支持更多股票"""
         bs.login()
         stocks = []
         try:
-            if index_type == "hs300": 
-                rs = bs.query_hs300_stocks()
-            elif index_type == "sz50":
-                rs = bs.query_sz50_stocks()
-            elif index_type == "zz1000":
-                # 尝试获取更多股票
-                rs = bs.query_all_stock()
-            else: 
-                rs = bs.query_zz500_stocks()
-            
-            while rs.next(): 
-                row_data = rs.get_row_data()
-                if len(row_data) > 1:
-                    stock_code = row_data[1] if index_type != "zz1000" else row_data[0]
-                    stocks.append(stock_code)
-        except: 
-            pass
-        finally: 
-            bs.logout()
-        
-        # 去重并限制数量
-        unique_stocks = list(set(stocks))
-        return unique_stocks[:min(self.MAX_SCAN_LIMIT, len(unique_stocks))]
+            if index_type == "hs300": rs = bs.query_hs300_stocks()
+            else: rs = bs.query_zz500_stocks()
+            while rs.next(): stocks.append(rs.get_row_data()[1])
+        except: pass
+        finally: bs.logout()
+        return stocks[:self.MAX_SCAN_LIMIT]  # 限制数量
 
     def calc_winner_rate(self, df, current_price):
         if df.empty: return 0.0
@@ -152,7 +132,6 @@ class QuantsEngine:
         else: return "Low (安全)"
 
     def _process_single_stock(self, code, max_price=None):
-        """处理单个股票 - 保持原有逻辑"""
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
         start = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
@@ -260,53 +239,51 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    def scan_market_batch(self, code_list, max_price=None):
-        """分批扫描市场，支持6000只股票"""
+    def scan_market_optimized(self, code_list, max_price=None):
+        """扫描市场 - 保持原来的进度条逻辑，但支持6000股"""
         results, alerts, valid_codes_list = [], [], []
-        
-        if not code_list:
-            st.warning("股票列表为空！")
-            return results, alerts, valid_codes_list
-        
-        total = len(code_list)
-        if total > self.MAX_SCAN_LIMIT:
+        lg = bs.login()
+        if lg.error_code != '0':
+            st.error("连接服务器失败，请检查网络！")
+            return [], [], []
+
+        # 限制最大扫描数量
+        if len(code_list) > self.MAX_SCAN_LIMIT:
             code_list = code_list[:self.MAX_SCAN_LIMIT]
-            total = len(code_list)
-            st.info(f"⚠️ 股票数量超过限制，已截取前{total}只")
+            st.info(f"⚠️ 股票数量超过限制，已截取前{self.MAX_SCAN_LIMIT}只")
+
+        total = len(code_list)
         
-        # 创建进度条
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # 创建进度容器 - 保持原来的样式
+        progress_container = st.empty()
+        progress_bar = progress_container.progress(0, text=f"🚀 正在启动稳定扫描 (共 {total} 只)...")
         
-        # 分批处理
-        for i in range(0, total, self.BATCH_SIZE):
-            batch_codes = code_list[i:i+self.BATCH_SIZE]
-            batch_size = len(batch_codes)
+        # 分批处理避免UI卡顿
+        BATCH_SIZE = 20  # 每20只更新一次进度
+        
+        for i, code in enumerate(code_list):
+            # 每处理BATCH_SIZE只股票或最后一只时更新进度
+            if i % BATCH_SIZE == 0 or i == total - 1:
+                progress = (i + 1) / total
+                current_count = min(i + 1, total)
+                progress_bar.progress(progress, 
+                                    text=f"🔍 正在分析: {code} ({current_count}/{total}) | 已命中: {len(results)} 只")
             
-            # 更新进度
-            progress = (i + batch_size) / total
-            progress_bar.progress(progress)
-            status_text.text(f"📊 扫描进度: {i+batch_size}/{total} | 已命中: {len(results)}")
-            
-            # 处理当前批次
-            for code in batch_codes:
-                try:
-                    res = self._process_single_stock(code, max_price)
-                    if res:
-                        results.append(res["result"])
-                        if res["alert"]: 
-                            alerts.append(res["alert"])
-                        valid_codes_list.append(res["option"])
-                except Exception as e:
-                    continue
-            
-            # 批次间短暂延迟
-            time.sleep(0.5)
-        
-        # 清理进度显示
-        progress_bar.empty()
-        status_text.empty()
-        
+            try:
+                res = self._process_single_stock(code, max_price)
+                if res:
+                    results.append(res["result"])
+                    if res["alert"]: alerts.append(res["alert"])
+                    valid_codes_list.append(res["option"])
+            except:
+                # 如果出错，重新登录继续
+                bs.logout()
+                time.sleep(0.5)
+                bs.login()
+                continue
+
+        bs.logout()
+        progress_container.empty()
         return results, alerts, valid_codes_list
 
     @st.cache_data(ttl=600)
@@ -414,18 +391,17 @@ class QuantsEngine:
         return fig
 
 # ==========================================
-# 3. 界面 UI - 保持原有界面不变
+# 3. 界面 UI - 完全保持原样，只增加全市场选项
 # ==========================================
 engine = QuantsEngine()
 
 st.sidebar.header("🕹️ 控制台")
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
-# 修改选股范围选项，增加全市场选项
-pool_mode = st.sidebar.radio("🔎 选股范围:", 
-                            ["中证500 (中小盘)", "沪深300 (大盘)", "全市场扫描", "手动输入"])
+# 在原基础上增加"全市场扫描"选项
+pool_mode = st.sidebar.radio("🔎 选股范围:", ("中证500 (中小盘)", "沪深300 (大盘)", "全市场扫描", "手动输入"))
 
-# 增加扫描数量到6000
+# 将扫描数量上限增加到6000
 scan_limit = st.sidebar.slider("🔢 扫描数量 (池大小)", 50, 6000, 500, step=50)
 
 if pool_mode == "手动输入":
@@ -433,8 +409,8 @@ if pool_mode == "手动输入":
     target_pool_str = st.sidebar.text_area("监控股票池", default_pool, height=100)
     final_code_list = target_pool_str.replace("，", ",").split(",")
 else:
-    if st.sidebar.button(f"📥 加载 {pool_mode} 股票"):
-        with st.spinner("正在获取股票列表..."):
+    if st.sidebar.button(f"📥 加载 {pool_mode} 成分股"):
+        with st.spinner("正在获取成分股..."):
             if pool_mode == "全市场扫描":
                 stock_list = engine.get_all_stocks()
             elif "中证500" in pool_mode:
@@ -446,9 +422,9 @@ else:
             
             if stock_list:
                 st.session_state['full_pool'] = stock_list 
-                st.sidebar.success(f"已加载 {len(stock_list)} 只股票")
+                st.sidebar.success(f"已加载全量 {len(stock_list)} 只股票")
             else:
-                st.sidebar.error("获取股票列表失败")
+                st.sidebar.error("获取股票失败，请重试")
     
     if 'full_pool' in st.session_state:
         full_list = st.session_state['full_pool']
@@ -462,10 +438,10 @@ if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
     if not final_code_list:
         st.sidebar.error("请先加载股票！")
     else:
-        st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交 | 模式：大规模批次扫描")
+        st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交 | 模式：长连接稳定扫描")
         
-        # 使用新的分批扫描方法
-        scan_res, alerts, valid_options = engine.scan_market_batch(final_code_list, max_price=max_price_limit)
+        # 使用原来的扫描方法，它会显示正常的进度条
+        scan_res, alerts, valid_options = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
         
         st.session_state['scan_res'] = scan_res
         st.session_state['valid_options'] = valid_options
@@ -490,17 +466,17 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
     if df_scan.empty:
         st.warning(f"⚠️ 扫描完成，无符合条件的股票。")
     else:
-        # 添加分页功能
-        page_size = 20
-        total_pages = max(1, (len(df_scan) + page_size - 1) // page_size)
-        
-        if total_pages > 1:
+        # 大数据量时分页显示
+        if len(df_scan) > 100:
+            page_size = 50
+            total_pages = max(1, (len(df_scan) + page_size - 1) // page_size)
+            
             page_num = st.number_input("📄 页码", min_value=1, max_value=total_pages, value=1)
             start_idx = (page_num - 1) * page_size
             end_idx = min(start_idx + page_size, len(df_scan))
             display_df = df_scan.iloc[start_idx:end_idx]
             
-            st.caption(f"显示第 {start_idx+1}-{end_idx} 条，共 {len(df_scan)} 条")
+            st.caption(f"显示第 {start_idx+1}-{end_idx} 条，共 {len(df_scan)} 条 (第 {page_num}/{total_pages} 页)")
         else:
             display_df = df_scan
         
@@ -564,21 +540,20 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
             else:
                 st.error("无法获取数据")
 
-# 添加系统状态信息
+# 添加简单统计信息
 with st.expander("📊 系统状态", expanded=False):
     col1, col2 = st.columns(2)
     with col1:
         if 'full_pool' in st.session_state:
-            st.metric("股票池总量", len(st.session_state['full_pool']))
+            st.metric("股票池总量", f"{len(st.session_state['full_pool']):,}")
         else:
-            st.metric("股票池总量", 0)
+            st.metric("股票池总量", "0")
     
     with col2:
         if 'scan_res' in st.session_state:
-            st.metric("当前结果数", len(st.session_state['scan_res']))
+            st.metric("当前结果数", f"{len(st.session_state['scan_res']):,}")
         else:
-            st.metric("当前结果数", 0)
+            st.metric("当前结果数", "0")
     
-    st.write(f"扫描引擎版本: V45 (支持{engine.MAX_SCAN_LIMIT}股)")
-    st.write(f"批次处理大小: {engine.BATCH_SIZE}股/批")
-    st.write(f"最后更新: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.write(f"最大扫描数量: {engine.MAX_SCAN_LIMIT:,} 只")
+    st.write(f"当前时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
