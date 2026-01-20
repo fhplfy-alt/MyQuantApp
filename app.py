@@ -30,9 +30,8 @@ except ImportError as e:
     st.stop()
 
 # ==========================================
-# 0. 全局配置 (🔥 核心修改区：说明书补全 🔥)
+# 0. 全局配置
 # ==========================================
-# 这里补全了你在表格里可能看到的所有信号
 STRATEGY_TIP = """
 👇 信号含义详细对照：
 👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足，最强主升浪信号！
@@ -62,11 +61,11 @@ STRATEGY_LOGIC = {
 }
 
 # ==========================================
-# 2. 核心引擎 (V44 稳定内核保持不变，增加6000股支持)
+# 2. 核心引擎
 # ==========================================
 class QuantsEngine:
     def __init__(self):
-        self.MAX_SCAN_LIMIT = 6000  # 增加最大扫描限制
+        self.MAX_SCAN_LIMIT = 6000
     
     def clean_code(self, code):
         code = str(code).strip()
@@ -115,7 +114,7 @@ class QuantsEngine:
             while rs.next(): stocks.append(rs.get_row_data()[1])
         except: pass
         finally: bs.logout()
-        return stocks[:self.MAX_SCAN_LIMIT]  # 限制数量
+        return stocks[:self.MAX_SCAN_LIMIT]
 
     def calc_winner_rate(self, df, current_price):
         if df.empty: return 0.0
@@ -240,29 +239,25 @@ class QuantsEngine:
         }
 
     def scan_market_optimized(self, code_list, max_price=None):
-        """扫描市场 - 保持原来的进度条逻辑，但支持6000股"""
+        """扫描市场 - 保持原来的进度条逻辑"""
         results, alerts, valid_codes_list = [], [], []
         lg = bs.login()
         if lg.error_code != '0':
             st.error("连接服务器失败，请检查网络！")
             return [], [], []
 
-        # 限制最大扫描数量
         if len(code_list) > self.MAX_SCAN_LIMIT:
             code_list = code_list[:self.MAX_SCAN_LIMIT]
             st.info(f"⚠️ 股票数量超过限制，已截取前{self.MAX_SCAN_LIMIT}只")
 
         total = len(code_list)
         
-        # 创建进度容器 - 保持原来的样式
         progress_container = st.empty()
         progress_bar = progress_container.progress(0, text=f"🚀 正在启动稳定扫描 (共 {total} 只)...")
         
-        # 分批处理避免UI卡顿
-        BATCH_SIZE = 20  # 每20只更新一次进度
+        BATCH_SIZE = 20
         
         for i, code in enumerate(code_list):
-            # 每处理BATCH_SIZE只股票或最后一只时更新进度
             if i % BATCH_SIZE == 0 or i == total - 1:
                 progress = (i + 1) / total
                 current_count = min(i + 1, total)
@@ -276,7 +271,6 @@ class QuantsEngine:
                     if res["alert"]: alerts.append(res["alert"])
                     valid_codes_list.append(res["option"])
             except:
-                # 如果出错，重新登录继续
                 bs.logout()
                 time.sleep(0.5)
                 bs.login()
@@ -286,128 +280,236 @@ class QuantsEngine:
         progress_container.empty()
         return results, alerts, valid_codes_list
 
-    @st.cache_data(ttl=600)
-    def get_deep_data(_self, code):
-        bs.login()
+    def get_deep_data(self, code):
+        """获取深度数据 - 修复白屏问题"""
         try:
+            bs.login()
+            # 缩短时间范围，避免数据过多
             end = datetime.datetime.now().strftime("%Y-%m-%d")
-            start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
-            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,peTTM,pbMRQ", start_date=start, end_date=end, frequency="d", adjustflag="3")
+            start = (datetime.datetime.now() - datetime.timedelta(days=180)).strftime("%Y-%m-%d")
+            
+            # 只获取必要字段，避免复杂数据
+            rs = bs.query_history_k_data_plus(
+                code, 
+                "date,open,close,high,low,volume",  # 移除peTTM,pbMRQ，可能为空
+                start_date=start, 
+                end_date=end, 
+                frequency="d", 
+                adjustflag="3"
+            )
+            
+            if rs.error_code != '0':
+                bs.logout()
+                return None
+                
             data = []
-            while rs.next(): data.append(rs.get_row_data())
-            if not data: return None
-            df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "peTTM", "pbMRQ"])
-            cols = ['open', 'close', 'high', 'low', 'volume', 'peTTM', 'pbMRQ']
-            df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
-            df.dropna(subset=['close'], inplace=True)
+            while rs.next(): 
+                data.append(rs.get_row_data())
+            
+            bs.logout()
+            
+            if not data: 
+                return None
+                
+            df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume"])
+            
+            # 安全转换数据类型
+            for col in ["open", "close", "high", "low", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # 清理无效数据
+            df = df.dropna(subset=['close', 'volume'])
+            
+            if len(df) < 20:  # 降低数据要求
+                return None
+                
             return df
-        finally: bs.logout()
+            
+        except Exception as e:
+            try:
+                bs.logout()
+            except:
+                pass
+            return None
 
     def run_ai_prediction(self, df):
-        if len(df) < 30: return None
-        recent = df.tail(30).reset_index(drop=True)
-        X = np.array(recent.index).reshape(-1, 1)
-        y = recent['close'].values
-        model = LinearRegression()
-        model.fit(X, y)
-        last_idx = recent.index[-1]
-        future_idx = np.array([[last_idx + 1], [last_idx + 2], [last_idx + 3]])
-        pred_prices = model.predict(future_idx)
-        
-        future_dates = []
-        current_date = datetime.date.today()
-        for i in range(1, 4):
-            d = current_date + datetime.timedelta(days=i)
-            future_dates.append(d.strftime("%Y-%m-%d"))
+        """AI预测 - 增加异常处理"""
+        if df is None or len(df) < 20:
+            return None
+            
+        try:
+            recent = df.tail(20).reset_index(drop=True)
+            X = np.array(recent.index).reshape(-1, 1)
+            y = recent['close'].values
+            
+            # 检查数据有效性
+            if len(y) < 5 or np.isnan(y).any():
+                return None
+                
+            model = LinearRegression()
+            model.fit(X, y)
+            last_idx = recent.index[-1]
+            future_idx = np.array([[last_idx + 1], [last_idx + 2], [last_idx + 3]])
+            pred_prices = model.predict(future_idx)
+            
+            future_dates = []
+            current_date = datetime.date.today()
+            for i in range(1, 4):
+                d = current_date + datetime.timedelta(days=i)
+                future_dates.append(d.strftime("%Y-%m-%d"))
 
-        slope = model.coef_[0]
-        last_price = df['close'].iloc[-1]
-        
-        if slope > 0.05:
-            hint_title = "🚀 上升通道加速中"
-            hint_desc = f"惯性推演：股价将在 **{future_dates[1]}** 尝试冲击 **¥{pred_prices[1]:.2f}**。"
-            action = "建议：坚定持有 / 逢低买入"
-            color = "red"
-        elif slope > 0:
-            hint_title = "📈 震荡缓慢上行"
-            hint_desc = f"趋势温和，预计 **{future_dates[1]}** 到达 **¥{pred_prices[1]:.2f}**。"
-            action = "建议：耐心持股"
-            color = "red"
-        elif slope < -0.05:
-            hint_title = "📉 下跌趋势加速"
-            hint_desc = f"空头较强，预计 **{future_dates[1]}** 回落至 **¥{pred_prices[1]:.2f}**。"
-            action = "建议：反弹卖出"
-            color = "green"
-        else:
-            hint_title = "⚖️ 横盘震荡"
-            hint_desc = f"多空平衡，预计 **{future_dates[1]}** 在 **¥{pred_prices[1]:.2f}** 震荡。"
-            action = "建议：观望"
-            color = "blue"
+            slope = model.coef_[0]
+            last_price = df['close'].iloc[-1]
+            
+            if slope > 0.05:
+                hint_title = "🚀 上升通道加速中"
+                hint_desc = f"惯性推演：股价将在 **{future_dates[1]}** 尝试冲击 **¥{pred_prices[1]:.2f}**。"
+                action = "建议：坚定持有 / 逢低买入"
+                color = "red"
+            elif slope > 0:
+                hint_title = "📈 震荡缓慢上行"
+                hint_desc = f"趋势温和，预计 **{future_dates[1]}** 到达 **¥{pred_prices[1]:.2f}**。"
+                action = "建议：耐心持股"
+                color = "red"
+            elif slope < -0.05:
+                hint_title = "📉 下跌趋势加速"
+                hint_desc = f"空头较强，预计 **{future_dates[1]}** 回落至 **¥{pred_prices[1]:.2f}**。"
+                action = "建议：反弹卖出"
+                color = "green"
+            else:
+                hint_title = "⚖️ 横盘震荡"
+                hint_desc = f"多空平衡，预计 **{future_dates[1]}** 在 **¥{pred_prices[1]:.2f}** 震荡。"
+                action = "建议：观望"
+                color = "blue"
 
-        return {
-            "dates": future_dates,
-            "prices": pred_prices,
-            "pred_price": pred_prices[0],
-            "title": hint_title,
-            "desc": hint_desc,
-            "action": action,
-            "color": color
-        }
+            return {
+                "dates": future_dates,
+                "prices": pred_prices,
+                "pred_price": pred_prices[0],
+                "title": hint_title,
+                "desc": hint_desc,
+                "action": action,
+                "color": color
+            }
+        except Exception as e:
+            # 预测失败时返回简单信息
+            return {
+                "dates": ["明日", "后日", "大后日"],
+                "prices": [0, 0, 0],
+                "pred_price": 0,
+                "title": "⚠️ 数据不足",
+                "desc": "当前数据不足以进行准确预测",
+                "action": "建议：补充数据后重试",
+                "color": "blue"
+            }
 
     def calc_indicators(self, df):
-        df = df.copy()
-        df['MA5'] = df['close'].rolling(5).mean()
-        df['MA20'] = df['close'].rolling(20).mean()
-        exp1 = df['close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['close'].ewm(span=26, adjust=False).mean()
-        df['DIF'] = exp1 - exp2
-        df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
-        df['MACD'] = 2 * (df['DIF'] - df['DEA'])
-        return df
+        """计算技术指标 - 增加异常处理"""
+        if df is None or df.empty:
+            return df
+            
+        try:
+            df = df.copy()
+            df['MA5'] = df['close'].rolling(5).mean()
+            df['MA20'] = df['close'].rolling(20).mean()
+            
+            # 尝试计算MACD，但忽略错误
+            try:
+                exp1 = df['close'].ewm(span=12, adjust=False).mean()
+                exp2 = df['close'].ewm(span=26, adjust=False).mean()
+                df['DIF'] = exp1 - exp2
+                df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
+                df['MACD'] = 2 * (df['DIF'] - df['DEA'])
+            except:
+                pass
+                
+            return df
+        except:
+            return df
 
     def plot_professional_kline(self, df, title):
-        df['Signal'] = 0
-        df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 
-        df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 
+        """绘制K线图 - 增加异常处理"""
+        if df is None or df.empty or len(df) < 10:
+            return None
+            
+        try:
+            df = self.calc_indicators(df)
+            
+            # 创建信号列，但安全处理
+            df['Signal'] = 0
+            if 'MA5' in df.columns and 'MA20' in df.columns:
+                try:
+                    df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 
+                    df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 
+                except:
+                    pass
 
-        buy_points = df[df['Signal'] == 1]
-        sell_points = df[df['Signal'] == -1]
+            buy_points = df[df['Signal'] == 1]
+            sell_points = df[df['Signal'] == -1]
 
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(
-            x=df['date'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
-            name='K线', increasing_line_color='red', decreasing_line_color='green'
-        ))
-        fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
-        fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(
+                x=df['date'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+                name='K线', increasing_line_color='red', decreasing_line_color='green'
+            ))
+            
+            # 安全添加均线
+            if 'MA5' in df.columns:
+                fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], name='MA5', line=dict(color='orange', width=1)))
+            
+            if 'MA20' in df.columns:
+                fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
 
-        if not buy_points.empty:
-            fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=12, color='red'), text='B', textposition='bottom center', name='买入'))
-        
-        if not sell_points.empty:
-            fig.add_trace(go.Scatter(x=sell_points['date'], y=sell_points['high']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=12, color='green'), text='S', textposition='top center', name='卖出'))
+            # 安全添加买卖点
+            if not buy_points.empty:
+                try:
+                    fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', 
+                                           marker=dict(symbol='triangle-up', size=12, color='red'), 
+                                           text='B', textposition='bottom center', name='买入'))
+                except:
+                    pass
+            
+            if not sell_points.empty:
+                try:
+                    fig.add_trace(go.Scatter(x=sell_points['date'], y=sell_points['high']*1.02, mode='markers+text', 
+                                           marker=dict(symbol='triangle-down', size=12, color='green'), 
+                                           text='S', textposition='top center', name='卖出'))
+                except:
+                    pass
 
-        fig.update_layout(title=f"{title} - 智能操盘K线 (含B/S点)", xaxis_rangeslider_visible=False, height=600)
-        return fig
+            fig.update_layout(title=f"{title} - 智能操盘K线", xaxis_rangeslider_visible=False, height=500)
+            return fig
+        except Exception as e:
+            return None
 
 # ==========================================
-# 3. 界面 UI - 完全保持原样，只增加全市场选项
+# 3. 界面 UI
 # ==========================================
 engine = QuantsEngine()
+
+# 初始化session_state
+if 'full_pool' not in st.session_state:
+    st.session_state['full_pool'] = []
+if 'scan_res' not in st.session_state:
+    st.session_state['scan_res'] = []
+if 'valid_options' not in st.session_state:
+    st.session_state['valid_options'] = []
+if 'alerts' not in st.session_state:
+    st.session_state['alerts'] = []
+if 'analyzing' not in st.session_state:
+    st.session_state['analyzing'] = False
 
 st.sidebar.header("🕹️ 控制台")
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
-# 在原基础上增加"全市场扫描"选项
 pool_mode = st.sidebar.radio("🔎 选股范围:", ("中证500 (中小盘)", "沪深300 (大盘)", "全市场扫描", "手动输入"))
 
-# 将扫描数量上限增加到6000
 scan_limit = st.sidebar.slider("🔢 扫描数量 (池大小)", 50, 6000, 500, step=50)
 
 if pool_mode == "手动输入":
     default_pool = "600519, 002131, 002312, 600580, 002594"
     target_pool_str = st.sidebar.text_area("监控股票池", default_pool, height=100)
-    final_code_list = target_pool_str.replace("，", ",").split(",")
+    final_code_list = [code.strip() for code in target_pool_str.replace("，", ",").split(",") if code.strip()]
 else:
     if st.sidebar.button(f"📥 加载 {pool_mode} 成分股"):
         with st.spinner("正在获取成分股..."):
@@ -439,10 +541,7 @@ if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
         st.sidebar.error("请先加载股票！")
     else:
         st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交 | 模式：长连接稳定扫描")
-        
-        # 使用原来的扫描方法，它会显示正常的进度条
         scan_res, alerts, valid_options = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
-        
         st.session_state['scan_res'] = scan_res
         st.session_state['valid_options'] = valid_options
         st.session_state['alerts'] = alerts
@@ -458,7 +557,7 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
     alerts = st.session_state.get('alerts', [])
     
     if alerts: 
-        alert_names = "、".join(alerts)
+        alert_names = "、".join(alerts[:5])  # 限制显示数量
         st.success(f"🔥 发现 {len(alerts)} 只【主力高控盘】标的：**{alert_names}**")
     
     df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
@@ -466,7 +565,6 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
     if df_scan.empty:
         st.warning(f"⚠️ 扫描完成，无符合条件的股票。")
     else:
-        # 大数据量时分页显示
         if len(df_scan) > 100:
             page_size = 50
             total_pages = max(1, (len(df_scan) + page_size - 1) // page_size)
@@ -505,42 +603,75 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
     target_code = target.split("|")[0].strip()
     target_name = target.split("|")[1].strip()
 
-    if st.button(f"🚀 立即分析 {target_name}"):
-        with st.spinner("AI 正在推演未来变盘点..."):
-            df = engine.get_deep_data(target_code)
-            if df is not None:
-                df = engine.calc_indicators(df)
-                future_info = engine.run_ai_prediction(df)
+    if st.button(f"🚀 立即分析 {target_name}", key="analyze_btn"):
+        # 设置分析状态
+        st.session_state['analyzing'] = True
+        
+        # 使用try-except包装整个分析过程
+        try:
+            with st.spinner("AI 正在推演未来变盘点..."):
+                # 获取数据 - 添加更多错误处理
+                df = engine.get_deep_data(target_code)
                 
-                if future_info:
+                if df is not None and not df.empty:
+                    # 基本信息
                     last = df.iloc[-1]
                     col1, col2, col3 = st.columns(3)
                     col1.metric("当前价格", f"¥{last['close']:.2f}")
-                    col2.metric("AI预测明日", f"¥{future_info['pred_price']:.2f}", delta=f"{future_info['pred_price']-last['close']:.2f}", delta_color="inverse")
-                    pe = last.get('peTTM', 0)
-                    col3.metric("PE估值", f"{pe:.1f}")
                     
-                    if future_info['color'] == 'red':
-                        st.error(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
-                    elif future_info['color'] == 'green':
-                        st.success(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
+                    # AI预测
+                    future_info = engine.run_ai_prediction(df)
+                    
+                    if future_info and future_info['pred_price'] > 0:
+                        col2.metric("AI预测明日", f"¥{future_info['pred_price']:.2f}", 
+                                   delta=f"{future_info['pred_price']-last['close']:.2f}", 
+                                   delta_color="inverse")
+                        
+                        if future_info['color'] == 'red':
+                            st.error(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
+                        elif future_info['color'] == 'green':
+                            st.success(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
+                        else:
+                            st.info(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
+
+                        st.markdown("### 📅 AI 时空推演 (未来3日)")
+                        d_cols = st.columns(3)
+                        for i in range(3):
+                            d_cols[i].metric(label=future_info['dates'][i], 
+                                           value=f"¥{future_info['prices'][i]:.2f}", 
+                                           delta="预测")
                     else:
-                        st.info(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
-
-                    st.markdown("### 📅 AI 时空推演 (未来3日)")
-                    d_cols = st.columns(3)
-                    for i in range(3):
-                        d_cols[i].metric(label=future_info['dates'][i], value=f"¥{future_info['prices'][i]:.2f}", delta="预测")
+                        col2.metric("AI预测明日", f"¥{last['close']:.2f}", delta="数据不足")
+                        st.warning("⚠️ 数据不足以进行AI预测，显示当前价格")
+                    
+                    col3.metric("数据天数", len(df))
+                    
+                    # K线图
+                    st.markdown("### 📊 K线分析")
+                    fig = engine.plot_professional_kline(df, target_name)
+                    
+                    if fig:
+                        st.plotly_chart(fig, width='stretch')
+                        st.info("💡 **图例**: 🔺红色B=金叉买点 | 🔻绿色S=死叉卖点 (仅供辅助参考)")
+                    else:
+                        st.warning("⚠️ 无法生成K线图，数据可能不足")
+                        
+                    # 显示最近数据
+                    with st.expander("📋 查看最近交易数据"):
+                        st.dataframe(df.tail(10))
+                        
                 else:
-                    st.warning("数据不足，无法预测")
+                    st.error("❌ 无法获取该股票的详细数据，请尝试重新扫描或选择其他股票")
+                    
+        except Exception as e:
+            st.error(f"❌ 分析过程中出现错误: {str(e)[:100]}")
+            st.info("💡 建议：请重试或选择其他股票进行分析")
+            
+        finally:
+            # 重置分析状态
+            st.session_state['analyzing'] = False
 
-                fig = engine.plot_professional_kline(df, target_name)
-                st.plotly_chart(fig, width='stretch')
-                st.info("💡 **图例**: 🔺红色B=金叉买点 | 🔻绿色S=死叉卖点 (仅供辅助参考)")
-            else:
-                st.error("无法获取数据")
-
-# 添加简单统计信息
+# 添加系统状态信息
 with st.expander("📊 系统状态", expanded=False):
     col1, col2 = st.columns(2)
     with col1:
@@ -555,5 +686,17 @@ with st.expander("📊 系统状态", expanded=False):
         else:
             st.metric("当前结果数", "0")
     
-    st.write(f"最大扫描数量: {engine.MAX_SCAN_LIMIT:,} 只")
+    if 'valid_options' in st.session_state:
+        st.write(f"可选分析股票: {len(st.session_state['valid_options'])} 只")
+    
+    st.write(f"最大扫描限制: {engine.MAX_SCAN_LIMIT:,} 只")
     st.write(f"当前时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+# 添加使用提示
+st.caption("""
+💡 **使用提示**: 
+1. 扫描大量股票时请耐心等待，进度条会正常显示扫描进度
+2. 点击"分析"按钮时，系统会安全获取数据，避免白屏
+3. 如果某只股票分析失败，请尝试选择其他股票
+4. 投资有风险，决策需谨慎
+""")
