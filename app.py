@@ -1,63 +1,19 @@
+import datetime
+import time
 import streamlit as st
+import baostock as bs
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+import plotly.graph_objects as go
 
-# ==========================================
-# ⚠️ 核心配置
-# ==========================================
-st.set_page_config(
-    page_title="V45 完美说明书版", 
-    layout="wide", 
-    page_icon="🛡️",
-    initial_sidebar_state="expanded"
-)
-
-st.title("🛡️ V45 智能量化系统 (全信号图例版)")
-st.caption("✅ 系统已就绪 | 核心组件加载完成 | 支持6000股扫描 | V45 Build")
-
-# ==========================================
-# 1. 安全导入
-# ==========================================
-try:
-    import plotly.graph_objects as go
-    import random
-    import baostock as bs
-    import pandas as pd
-    import numpy as np
-    import time
-    import datetime
-    from sklearn.linear_model import LinearRegression
-except ImportError as e:
-    st.error(f"❌ 启动失败！缺少必要运行库: {e}")
-    st.stop()
-
-# ==========================================
-# 0. 全局配置
-# ==========================================
-STRATEGY_TIP = """
-👇 信号含义详细对照：
-👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足，最强主升浪信号！
-🐲 妖股基因: 60天内3板 + 筹码>80%，游资龙头特征。
-🔥 换手锁仓: 连续高换手 + 高获利，主力清洗浮筹接力。
-🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中，主力潜伏期。
-📈 多头排列: 股价收阳且重心上移，趋势健康，建议持有。
-🚀 金叉突变: 短期均线向上金叉长期均线，买入信号。
-⚡ 死叉/空头: 趋势向下或破位，建议规避。
-"""
-
-ACTION_TIP = """
-👇 操作建议说明：
-🟥 STRONG BUY: 【重点关注】确定性极高
-🟧 BUY (博弈): 【激进买入】短线博弈
-🟨 BUY (低吸): 【稳健买入】逢低建仓
-🟦 HOLD: 【持股】趋势完好，拿住不动
-⬜ WAIT: 【观望】无机会
-"""
-
-STRATEGY_LOGIC = {
-    "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
+# 策略说明配置
+STRATEGY_DESC = {
     "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
     "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
     "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
-    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
+    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价",
+    "👑 四星共振": "20日有涨停 + 10日有跳空 + 15日有4连阳 + 放量1.8倍"
 }
 
 # ==========================================
@@ -177,26 +133,43 @@ class QuantsEngine:
         signal_tags = []
         priority = 0
         action = "WAIT (观望)"
-
+        # ========== 新增：买卖操作详细提示 ==========
+        buy_reason = ""
+        sell_warning = ""
+        position_suggestion = "0% (空仓)"  # 仓位建议
+        stop_loss_price = round(curr['close'] * 0.95, 2)  # 止损价（默认5%）
+        take_profit_price = 0  # 止盈价
+        
         is_3_up = all(df['pctChg'].tail(3) > 0)
         sum_3_rise = df['pctChg'].tail(3).sum()
         if (is_3_up and sum_3_rise <= 5 and winner_rate > 62):
             signal_tags.append("🔴温和吸筹")
             priority = max(priority, 60)
             action = "BUY (低吸)"
+            buy_reason = "3连阳且累计涨幅温和，获利筹码充足，低位吸筹安全边际高"
+            position_suggestion = "20-30% (轻仓)"
+            take_profit_price = round(curr['close'] * 1.10, 2)  # 止盈10%
 
         is_high_turn = all(df['turn'].tail(2) > 5) 
         if is_high_turn and winner_rate > 70:
             signal_tags.append("🔥换手锁仓")
             priority = max(priority, 70)
             action = "BUY (博弈)"
+            buy_reason = "连续高换手洗盘，获利筹码占比高，资金锁仓意愿强"
+            position_suggestion = "30-50% (中仓)"
+            take_profit_price = round(curr['close'] * 1.15, 2)  # 止盈15%
+            stop_loss_price = round(curr['close'] * 0.93, 2)  # 止损7%
 
         df_60 = df.tail(60)
         limit_up_60 = len(df_60[df_60['pctChg'] > 9.5])
         if limit_up_60 >= 3 and winner_rate > 80 and days_listed > 30:
             signal_tags.append("🐲妖股基因")
             priority = max(priority, 90)
-            action = "STRONG BUY"
+            action = "STRONG BUY (重仓)"
+            buy_reason = "近60日涨停次数多，获利筹码高度集中，妖股特征明显"
+            position_suggestion = "50-70% (重仓)"
+            take_profit_price = round(curr['close'] * 1.20, 2)  # 止盈20%
+            stop_loss_price = round(curr['close'] * 0.90, 2)  # 止损10%
 
         recent_20 = df.tail(20)
         has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
@@ -213,25 +186,48 @@ class QuantsEngine:
         if has_limit_up_20 and has_gap and has_streak and is_double_vol:
             signal_tags.append("👑四星共振")
             priority = 100
-            action = "STRONG BUY"
+            action = "STRONG BUY (满仓)"
+            buy_reason = "四星共振形态形成，量价齐升，短期爆发概率极高"
+            position_suggestion = "70-100% (满仓)"
+            take_profit_price = round(curr['close'] * 1.25, 2)  # 止盈25%
+            stop_loss_price = round(curr['close'] * 0.88, 2)  # 止损12%
         elif prev['open'] < prev['close'] and curr['close'] > prev['close']: 
              if priority == 0: 
                  action = "HOLD (持有)"
                  priority = 10
-                 signal_tags.append("📈多头")
-
+                 signal_tags.append("📈多头排列")
+                 buy_reason = "多头趋势形成，可继续持有"
+                 position_suggestion = "持有当前仓位"
+        
+        # ========== 新增：卖出信号判断 ==========
+        # 高危风险触发卖出
+        if risk_level == "High (高危)":
+            action = "SELL (卖出)"
+            sell_warning = "股价偏离5日均线过远，短期回调风险极大，建议立即卖出"
+            position_suggestion = "0% (清仓)"
+        # 破位触发卖出
+        elif risk_level == "Med (破位)":
+            action = "SELL (减仓)"
+            sell_warning = "股价跌破20日均线，趋势走弱，建议减仓或清仓"
+            position_suggestion = "0-20% (轻仓观望)"
+        
         if priority == 0: return None
 
         return {
             "result": {
-                "代码": code, "名称": info['name'], 
+                "代码": code, 
+                "名称": info['name'], 
                 "所属行业": info['industry'],
                 "现价": curr['close'], 
                 "涨跌": f"{curr['pctChg']:.2f}%", 
-                "获利筹码": winner_rate,
+                "获利筹码": round(winner_rate, 2),
                 "风险评级": risk_level,
                 "策略信号": " + ".join(signal_tags),
-                "综合评级": action,
+                "综合操作": action,
+                "操作理由": buy_reason if buy_reason else sell_warning if sell_warning else "暂无明确操作信号",
+                "仓位建议": position_suggestion,
+                "止损价": stop_loss_price,
+                "止盈价": take_profit_price if take_profit_price > 0 else "暂无",
                 "priority": priority
             },
             "alert": f"{info['name']}" if priority >= 90 else None,
@@ -499,6 +495,11 @@ if 'alerts' not in st.session_state:
 if 'analyzing' not in st.session_state:
     st.session_state['analyzing'] = False
 
+# ========== 新增：页面标题和操作提示 ==========
+st.title("📊 智能股票买卖决策系统")
+st.markdown("### 📌 核心功能：基于多维度策略自动生成买卖信号、仓位建议、止盈止损价")
+st.markdown("---")
+
 st.sidebar.header("🕹️ 控制台")
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
@@ -546,157 +547,113 @@ if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
         st.session_state['valid_options'] = valid_options
         st.session_state['alerts'] = alerts
 
-with st.expander("📖 **策略逻辑白皮书**", expanded=False):
-    st.markdown("##### 🔍 核心策略定义")
-    for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
-
-st.subheader(f"⚡ 扫描结果 (价格 < {max_price_limit}元)")
-
-if 'scan_res' in st.session_state and st.session_state['scan_res']:
-    results = st.session_state['scan_res']
-    alerts = st.session_state.get('alerts', [])
+# ========== 新增：扫描结果展示优化（突出买卖提示） ==========
+if st.session_state['scan_res']:
+    st.subheader("📋 股票买卖决策结果")
     
-    if alerts: 
-        alert_names = "、".join(alerts[:5])  # 限制显示数量
-        st.success(f"🔥 发现 {len(alerts)} 只【主力高控盘】标的：**{alert_names}**")
+    # 按优先级排序（高优先级在前）
+    sorted_res = sorted(st.session_state['scan_res'], key=lambda x: x['priority'], reverse=True)
     
-    df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
+    # 分类展示：买入/持有/卖出
+    buy_stocks = [s for s in sorted_res if "BUY" in s['综合操作']]
+    hold_stocks = [s for s in sorted_res if "HOLD" in s['综合操作']]
+    sell_stocks = [s for s in sorted_res if "SELL" in s['综合操作']]
     
-    if df_scan.empty:
-        st.warning(f"⚠️ 扫描完成，无符合条件的股票。")
-    else:
-        if len(df_scan) > 100:
-            page_size = 50
-            total_pages = max(1, (len(df_scan) + page_size - 1) // page_size)
+    # 买入信号展示
+    if buy_stocks:
+        st.markdown("### 🟢 买入信号（按优先级排序）")
+        for stock in buy_stocks:
+            # 不同优先级用不同颜色卡片
+            if stock['priority'] >= 90:
+                card_color = "#d4edda"  # 深绿（重仓/满仓）
+            elif stock['priority'] >= 70:
+                card_color = "#e8f5e9"  # 中绿（中仓）
+            else:
+                card_color = "#f1f8e9"  # 浅绿（轻仓）
             
-            page_num = st.number_input("📄 页码", min_value=1, max_value=total_pages, value=1)
-            start_idx = (page_num - 1) * page_size
-            end_idx = min(start_idx + page_size, len(df_scan))
-            display_df = df_scan.iloc[start_idx:end_idx]
-            
-            st.caption(f"显示第 {start_idx+1}-{end_idx} 条，共 {len(df_scan)} 条 (第 {page_num}/{total_pages} 页)")
-        else:
-            display_df = df_scan
-        
-        st.dataframe(
-            display_df, 
-            hide_index=True,
-            column_config={
-                "代码": st.column_config.TextColumn("代码"),
-                "名称": st.column_config.TextColumn("名称"),
-                "获利筹码": st.column_config.ProgressColumn("获利筹码(%)", format="%.1f%%", min_value=0, max_value=100),
-                "风险评级": st.column_config.TextColumn("风险评级", help="基于乖离率计算"),
-                "策略信号": st.column_config.TextColumn("策略信号", help=STRATEGY_TIP, width="large"),
-                "综合评级": st.column_config.TextColumn("综合评级", help=ACTION_TIP, width="medium"),
-                "priority": None
-            }
+            with st.container():
+                st.markdown(f"""
+                <div style="background-color:{card_color};padding:15px;border-radius:8px;margin-bottom:10px;">
+                    <h4 style="margin:0;color:#2e7d32;">{stock['名称']} ({stock['代码']}) - {stock['综合操作']}</h4>
+                    <p style="margin:5px 0;"><strong>所属行业：</strong>{stock['所属行业']}</p>
+                    <p style="margin:5px 0;"><strong>现价：</strong>¥{stock['现价']:.2f} | <strong>涨跌：</strong>{stock['涨跌']} | <strong>获利筹码：</strong>{stock['获利筹码']}%</p>
+                    <p style="margin:5px 0;"><strong>风险评级：</strong>{stock['风险评级']} | <strong>策略信号：</strong>{stock['策略信号']}</p>
+                    <p style="margin:5px 0;"><strong>操作理由：</strong>{stock['操作理由']}</p>
+                    <p style="margin:5px 0;"><strong>仓位建议：</strong>{stock['仓位建议']} | <strong>止损价：</strong>¥{stock['止损价']} | <strong>止盈价：</strong>¥{stock['止盈价']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # 持有信号展示
+    if hold_stocks:
+        st.markdown("### 🟡 持有信号")
+        for stock in hold_stocks:
+            card_color = "#fff3cd"
+            with st.container():
+                st.markdown(f"""
+                <div style="background-color:{card_color};padding:15px;border-radius:8px;margin-bottom:10px;">
+                    <h4 style="margin:0;color:#856404;">{stock['名称']} ({stock['代码']}) - {stock['综合操作']}</h4>
+                    <p style="margin:5px 0;"><strong>所属行业：</strong>{stock['所属行业']}</p>
+                    <p style="margin:5px 0;"><strong>现价：</strong>¥{stock['现价']:.2f} | <strong>涨跌：</strong>{stock['涨跌']} | <strong>获利筹码：</strong>{stock['获利筹码']}%</p>
+                    <p style="margin:5px 0;"><strong>风险评级：</strong>{stock['风险评级']} | <strong>策略信号：</strong>{stock['策略信号']}</p>
+                    <p style="margin:5px 0;"><strong>操作理由：</strong>{stock['操作理由']}</p>
+                    <p style="margin:5px 0;"><strong>仓位建议：</strong>{stock['仓位建议']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # 卖出信号展示
+    if sell_stocks:
+        st.markdown("### 🔴 卖出信号")
+        for stock in sell_stocks:
+            card_color = "#f8d7da"
+            with st.container():
+                st.markdown(f"""
+                <div style="background-color:{card_color};padding:15px;border-radius:8px;margin-bottom:10px;">
+                    <h4 style="margin:0;color:#721c24;">{stock['名称']} ({stock['代码']}) - {stock['综合操作']}</h4>
+                    <p style="margin:5px 0;"><strong>所属行业：</strong>{stock['所属行业']}</p>
+                    <p style="margin:5px 0;"><strong>现价：</strong>¥{stock['现价']:.2f} | <strong>涨跌：</strong>{stock['涨跌']} | <strong>获利筹码：</strong>{stock['获利筹码']}%</p>
+                    <p style="margin:5px 0;"><strong>风险评级：</strong>{stock['风险评级']} | <strong>策略信号：</strong>{stock['策略信号']}</p>
+                    <p style="margin:5px 0;"><strong>操作理由：</strong>{stock['操作理由']}</p>
+                    <p style="margin:5px 0;"><strong>仓位建议：</strong>{stock['仓位建议']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # 导出功能（可选）
+    if st.button("📤 导出买卖决策结果为Excel"):
+        df_res = pd.DataFrame(sorted_res)
+        # 只保留关键列
+        df_export = df_res[['代码', '名称', '所属行业', '现价', '涨跌', '获利筹码', '风险评级', '策略信号', '综合操作', '操作理由', '仓位建议', '止损价', '止盈价']]
+        st.download_button(
+            label="点击下载",
+            data=df_export.to_csv(index=False, encoding='utf-8-sig'),
+            file_name=f"股票买卖决策_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
         )
 else:
-    st.info("👈 请在左侧加载股票 -> 点击'启动全策略扫描'")
+    st.info("💡 请点击左侧【启动全策略扫描】按钮获取买卖决策结果")
 
-st.divider()
-
-if 'valid_options' in st.session_state and st.session_state['valid_options']:
-    st.subheader("🧠 深度分析")
-    target = st.selectbox("选择目标进行深度分析", st.session_state['valid_options'])
-    
-    target_code = target.split("|")[0].strip()
-    target_name = target.split("|")[1].strip()
-
-    if st.button(f"🚀 立即分析 {target_name}", key="analyze_btn"):
-        # 设置分析状态
-        st.session_state['analyzing'] = True
-        
-        # 使用try-except包装整个分析过程
-        try:
-            with st.spinner("AI 正在推演未来变盘点..."):
-                # 获取数据 - 添加更多错误处理
-                df = engine.get_deep_data(target_code)
-                
-                if df is not None and not df.empty:
-                    # 基本信息
-                    last = df.iloc[-1]
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("当前价格", f"¥{last['close']:.2f}")
-                    
-                    # AI预测
-                    future_info = engine.run_ai_prediction(df)
-                    
-                    if future_info and future_info['pred_price'] > 0:
-                        col2.metric("AI预测明日", f"¥{future_info['pred_price']:.2f}", 
-                                   delta=f"{future_info['pred_price']-last['close']:.2f}", 
-                                   delta_color="inverse")
-                        
-                        if future_info['color'] == 'red':
-                            st.error(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
-                        elif future_info['color'] == 'green':
-                            st.success(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
-                        else:
-                            st.info(f"### {future_info['title']}\n{future_info['desc']}\n\n**{future_info['action']}**")
-
-                        st.markdown("### 📅 AI 时空推演 (未来3日)")
-                        d_cols = st.columns(3)
-                        for i in range(3):
-                            d_cols[i].metric(label=future_info['dates'][i], 
-                                           value=f"¥{future_info['prices'][i]:.2f}", 
-                                           delta="预测")
-                    else:
-                        col2.metric("AI预测明日", f"¥{last['close']:.2f}", delta="数据不足")
-                        st.warning("⚠️ 数据不足以进行AI预测，显示当前价格")
-                    
-                    col3.metric("数据天数", len(df))
-                    
-                    # K线图
-                    st.markdown("### 📊 K线分析")
-                    fig = engine.plot_professional_kline(df, target_name)
-                    
-                    if fig:
-                        st.plotly_chart(fig, width='stretch')
-                        st.info("💡 **图例**: 🔺红色B=金叉买点 | 🔻绿色S=死叉卖点 (仅供辅助参考)")
-                    else:
-                        st.warning("⚠️ 无法生成K线图，数据可能不足")
-                        
-                    # 显示最近数据
-                    with st.expander("📋 查看最近交易数据"):
-                        st.dataframe(df.tail(10))
-                        
-                else:
-                    st.error("❌ 无法获取该股票的详细数据，请尝试重新扫描或选择其他股票")
-                    
-        except Exception as e:
-            st.error(f"❌ 分析过程中出现错误: {str(e)[:100]}")
-            st.info("💡 建议：请重试或选择其他股票进行分析")
+# ========== 新增：个股深度分析（带买卖提示） ==========
+if st.session_state['valid_options']:
+    st.markdown("---")
+    st.subheader("🔍 个股深度分析")
+    selected_stock = st.selectbox("选择股票", st.session_state['valid_options'])
+    if selected_stock:
+        code = selected_stock.split(" | ")[0]
+        df = engine.get_deep_data(code)
+        if df is not None:
+            # 绘制K线图
+            fig = engine.plot_professional_kline(df, selected_stock.split(" | ")[1])
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
             
-        finally:
-            # 重置分析状态
-            st.session_state['analyzing'] = False
-
-# 添加系统状态信息
-with st.expander("📊 系统状态", expanded=False):
-    col1, col2 = st.columns(2)
-    with col1:
-        if 'full_pool' in st.session_state:
-            st.metric("股票池总量", f"{len(st.session_state['full_pool']):,}")
+            # AI预测
+            ai_pred = engine.run_ai_prediction(df)
+            if ai_pred:
+                st.markdown(f"""
+                <div style="background-color:#f0f8ff;padding:10px;border-radius:5px;margin-top:10px;">
+                    <h5 style="margin:0;color:#0277bd;">{ai_pred['title']}</h5>
+                    <p style="margin:5px 0;">{ai_pred['desc']}</p>
+                    <p style="margin:5px 0;"><strong>操作建议：</strong>{ai_pred['action']}</p>
+                </div>
+                """, unsafe_allow_html=True)
         else:
-            st.metric("股票池总量", "0")
-    
-    with col2:
-        if 'scan_res' in st.session_state:
-            st.metric("当前结果数", f"{len(st.session_state['scan_res']):,}")
-        else:
-            st.metric("当前结果数", "0")
-    
-    if 'valid_options' in st.session_state:
-        st.write(f"可选分析股票: {len(st.session_state['valid_options'])} 只")
-    
-    st.write(f"最大扫描限制: {engine.MAX_SCAN_LIMIT:,} 只")
-    st.write(f"当前时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-# 添加使用提示
-st.caption("""
-💡 **使用提示**: 
-1. 扫描大量股票时请耐心等待，进度条会正常显示扫描进度
-2. 点击"分析"按钮时，系统会安全获取数据，避免白屏
-3. 如果某只股票分析失败，请尝试选择其他股票
-4. 投资有风险，决策需谨慎
-""")
+            st.error("无法获取该股票的深度数据")
