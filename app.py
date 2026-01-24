@@ -552,6 +552,13 @@ class QuantsEngine:
 
         bs.logout()
         progress_container.empty()
+        
+        # 显示扫描完成提示
+        if len(results) > 0:
+            st.success(f"✅ 扫描完成！共找到 {len(results)} 只符合条件的股票")
+        else:
+            st.info(f"ℹ️ 扫描完成！共扫描 {total} 只股票，未找到符合条件的股票")
+        
         return results, alerts, valid_codes_list
 
     def get_deep_data(self, code):
@@ -1025,7 +1032,8 @@ with st.expander("📖 **策略逻辑白皮书**", expanded=False):
 
 st.subheader(f"⚡ 扫描结果 (价格 < {max_price_limit}元)")
 
-if 'scan_res' in st.session_state and st.session_state['scan_res']:
+# 修复：检查 scan_res 是否存在，而不是检查它是否为真值（空列表也是有效结果）
+if 'scan_res' in st.session_state:
     results = st.session_state['scan_res']
     alerts = st.session_state.get('alerts', [])
     
@@ -1033,7 +1041,15 @@ if 'scan_res' in st.session_state and st.session_state['scan_res']:
         alert_names = "、".join(alerts[:5])  # 限制显示数量
         st.success(f"🔥 发现 {len(alerts)} 只【主力高控盘】标的：**{alert_names}**")
     
-    df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
+    # 修复：安全创建DataFrame，处理空结果的情况
+    if results and len(results) > 0:
+        try:
+            df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
+        except Exception as e:
+            st.error(f"❌ 数据处理错误: {str(e)}")
+            df_scan = pd.DataFrame()
+    else:
+        df_scan = pd.DataFrame()
     
     if df_scan.empty:
         st.warning(f"⚠️ 扫描完成，无符合条件的股票。")
