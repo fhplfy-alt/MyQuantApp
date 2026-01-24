@@ -1,7 +1,7 @@
 streamlit==1.40.1
 pandas==2.0.3
 numpy==1.24.4
-baostock==0.8.8
+yfinance==0.2.32
 plotly==5.17.0
 scikit-learn==1.3.2
-xlsxwriter==3.1.9
+
