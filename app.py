@@ -79,29 +79,27 @@ st.set_page_config(
 st.title("🛡️ V45 智能量化系统 (全信号图例版)")
 st.caption("✅ 系统已就绪 | 核心组件加载完成 | 支持6000股扫描 | V45 Build")
 
-# 新功能提示
-with st.expander("🆕 V45 重要新功能说明", expanded=False):
-    col_new1, col_new2, col_new3 = st.columns(3)
+# 新功能高亮显示
+st.success("🎉 **V45 新功能已激活！** 左侧边栏现在支持多策略扫描、参数自定义和历史记录管理")
+
+with st.expander("💡 查看V45新功能详情", expanded=True):
+    col_new1, col_new2 = st.columns(2)
     
     with col_new1:
-        st.markdown("**🔀 多策略并行扫描**")
-        st.write("• 9种策略可选")
-        st.write("• 策略对比分析")
-        st.write("• 命中统计展示")
+        st.markdown("#### 🆕 主要新功能")
+        st.markdown("- 🔀 **多策略并行扫描**: 同时运行9种不同策略")
+        st.markdown("- 📊 **策略对比模式**: 分析不同策略效果")
+        st.markdown("- ⚙️ **参数自定义**: 调整技术指标参数")
+        st.markdown("- 📈 **历史回测**: 验证策略有效性")
     
     with col_new2:
-        st.markdown("**⚙️ 策略参数自定义**")
-        st.write("• 调整均线周期")
-        st.write("• 设置RSI阈值")
-        st.write("• 自定义技术指标")
+        st.markdown("#### 🎯 使用方式")
+        st.markdown("1. **左侧边栏** - 选择多个扫描策略")
+        st.markdown("2. **高级参数** - 展开设置技术指标")
+        st.markdown("3. **扫描结果** - 查看导出和回测功能")
+        st.markdown("4. **历史记录** - 管理过往扫描结果")
     
-    with col_new3:
-        st.markdown("**📈 回测 & 导出功能**")
-        st.write("• 历史回测验证")
-        st.write("• Excel/CSV导出")
-        st.write("• 扫描历史记录")
-    
-    st.info("💡 **使用提示**: 在左侧边栏中找到对应的配置面板来使用这些新功能！")
+    st.warning("⚠️ **重要**: 如果看不到新功能，请刷新页面或清除浏览器缓存！")
 
 # ==========================================
 # 1. 安全导入
@@ -1517,8 +1515,29 @@ if 'scan_history' not in st.session_state:
 
 st.sidebar.header("🕹️ 控制台")
 
-# 快速功能提示
-st.sidebar.success("🆕 V45新功能已启用！请查看下方配置面板")
+# 🆕 新功能直接显示区域
+st.sidebar.markdown("---")
+st.sidebar.markdown("## 🆕 V45 新功能")
+
+# 1. 多策略配置（直接显示，不折叠）
+st.sidebar.markdown("### 🔀 多策略扫描")
+strategy_options = st.sidebar.multiselect(
+    "选择策略（可多选）:",
+    ["均线突破", "RSI超卖反弹", "量价背离", "KDJ金叉", "布林带突破", "温和吸筹", "换手锁仓", "妖股基因", "四星共振"],
+    default=["均线突破", "RSI超卖反弹", "KDJ金叉"],
+    key="strategy_selector"
+)
+st.session_state['selected_strategies'] = strategy_options
+
+comparison_mode = st.sidebar.checkbox("启用策略对比模式", value=False, key="comparison_checkbox")
+st.session_state['comparison_mode'] = comparison_mode
+
+if comparison_mode:
+    st.sidebar.info("🔍 对比模式已启用")
+
+# 2. 基本参数设置
+st.sidebar.markdown("---")
+st.sidebar.markdown("## ⚙️ 基本设置")
 
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
@@ -1562,32 +1581,46 @@ else:
     else:
         final_code_list = []
 
-# ==========================================
-# 多策略选择面板
-# ==========================================
+# 3. 历史记录功能
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔀 多策略配置")
-with st.sidebar.expander("🎯 策略选择与对比", expanded=True):
-    strategy_options = st.multiselect(
-        "选择扫描策略（可多选）:",
-        ["均线突破", "RSI超卖反弹", "量价背离", "KDJ金叉", "布林带突破", "温和吸筹", "换手锁仓", "妖股基因", "四星共振"],
-        default=["均线突破", "RSI超卖反弹", "KDJ金叉"]
-    )
+if st.session_state.get('scan_history'):
+    st.sidebar.markdown("### 📚 扫描历史")
+    recent_scans = st.session_state['scan_history'][:3]  # 显示最近3次
     
-    st.session_state['selected_strategies'] = strategy_options
-    
-    comparison_mode = st.checkbox("启用策略对比模式", value=False)
-    if comparison_mode:
-        st.session_state['comparison_mode'] = True
-        st.info("💡 对比模式：显示不同策略效果对比")
-    else:
-        st.session_state['comparison_mode'] = False
+    for i, record in enumerate(recent_scans):
+        with st.sidebar.container():
+            st.sidebar.text(f"📅 {record['timestamp']}")
+            st.sidebar.text(f"🎯 {record['result_count']}只 | {record['scan_type']}")
+            
+            col_hist1, col_hist2 = st.sidebar.columns(2)
+            with col_hist1:
+                if st.button("加载", key=f"load_hist_{i}"):
+                    st.session_state['scan_res'] = record['results']
+                    st.session_state['alerts'] = []
+                    valid_options = []
+                    for result in record['results']:
+                        valid_options.append(f"{result['代码']} | {result['名称']}")
+                    st.session_state['valid_options'] = valid_options
+                    st.success(f"✅ 已加载历史记录")
+                    st.rerun()
+            
+            with col_hist2:
+                if st.button("导出", key=f"export_hist_{i}"):
+                    export_df = pd.DataFrame(record['results'])
+                    csv = export_df.to_csv(index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="CSV",
+                        data=csv,
+                        file_name=f"历史_{record['timestamp'].replace(':', '-').replace(' ', '_')}.csv",
+                        mime="text/csv",
+                        key=f"download_hist_{i}"
+                    )
+            st.sidebar.markdown("---")
 
 # ==========================================
-# 策略参数面板  
+# 策略参数面板（高级设置）
 # ==========================================
-st.sidebar.markdown("### ⚙️ 策略参数设置")
-with st.sidebar.expander("📊 技术指标调整", expanded=False):
+with st.sidebar.expander("📊 高级参数设置", expanded=False):
     st.markdown("##### 📊 技术指标参数")
     
     # 均线参数
@@ -1637,91 +1670,27 @@ with st.sidebar.expander("📊 技术指标调整", expanded=False):
     if st.button("🔄 重置为默认参数"):
         st.rerun()
 
-# ==========================================
-# 历史扫描记录
-# ==========================================
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📚 历史记录")
-with st.sidebar.expander("🕐 扫描历史管理", expanded=False):
-    if st.session_state['scan_history']:
-        st.markdown("##### 🕐 最近扫描记录")
-        
-        for i, record in enumerate(st.session_state['scan_history']):
-            with st.container():
-                st.markdown(f"**#{i+1} {record['timestamp']}**")
-                st.write(f"🎯 {record['scan_type']} | 📊 {record['result_count']}/{record['stock_count']} 只")
-                st.write(f"💰 ≤¥{record['max_price']} | 🚨 {record['alerts_count']} 个强信号")
-                
-                col_hist1, col_hist2 = st.columns(2)
-                
-                with col_hist1:
-                    if st.button(f"📋 加载", key=f"load_{i}"):
-                        # 加载历史记录
-                        st.session_state['scan_res'] = record['results']
-                        st.session_state['alerts'] = []  # 重置alerts
-                        
-                        # 重新生成valid_options
-                        valid_options = []
-                        for result in record['results']:
-                            valid_options.append(f"{result['代码']} | {result['名称']}")
-                        st.session_state['valid_options'] = valid_options
-                        
-                        st.success(f"✅ 已加载 {record['timestamp']} 的扫描记录")
-                        st.rerun()
-                
-                with col_hist2:
-                    if st.button(f"📤 导出", key=f"export_{i}"):
-                        # 导出历史记录
-                        export_df = pd.DataFrame(record['results'])
-                        csv = export_df.to_csv(index=False, encoding='utf-8-sig')
-                        st.download_button(
-                            label="下载CSV",
-                            data=csv,
-                            file_name=f"历史扫描_{record['timestamp'].replace(':', '-').replace(' ', '_')}.csv",
-                            mime="text/csv",
-                            key=f"download_{i}"
-                        )
-                
-                # 显示策略信息
-                if record.get('strategies'):
-                    strategies_text = " | ".join(record['strategies'][:3])
-                    if len(record['strategies']) > 3:
-                        strategies_text += f" +{len(record['strategies'])-3}个"
-                    st.caption(f"策略: {strategies_text}")
-                
-                st.markdown("---")
-        
-        # 清空历史记录
-        if st.button("🗑️ 清空历史记录"):
-            st.session_state['scan_history'] = []
-            st.success("✅ 历史记录已清空")
-            st.rerun()
-    else:
-        st.info("暂无扫描历史记录")
+# (历史记录部分已移动到上方直接显示区域)
 
-# 当前配置状态显示
+# 4. 当前状态显示
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📊 当前配置状态")
+st.sidebar.markdown("### 📊 当前状态")
 
 # 显示当前策略配置
-selected_strategies = st.session_state.get('selected_strategies', ["均线突破", "RSI超卖反弹", "KDJ金叉"])
-st.sidebar.info(f"🎯 启用策略: {len(selected_strategies)}个")
-if selected_strategies:
-    st.sidebar.text("• " + "\n• ".join(selected_strategies[:3]))
-    if len(selected_strategies) > 3:
-        st.sidebar.text(f"• ... +{len(selected_strategies)-3}个策略")
+selected_strategies = st.session_state.get('selected_strategies', strategy_options)
+st.sidebar.info(f"🎯 策略: {len(selected_strategies)}个 {'(对比模式)' if comparison_mode else ''}")
 
-# 显示参数状态
-strategy_params = st.session_state.get('strategy_params', {})
-if strategy_params:
-    st.sidebar.text(f"⚙️ 自定义参数: {len(strategy_params)}项")
+# 显示股票池状态
+if 'full_pool' in st.session_state and final_code_list:
+    st.sidebar.success(f"📊 准备扫描: {len(final_code_list)} 只")
 
-comparison_mode = st.session_state.get('comparison_mode', False)
-if comparison_mode:
-    st.sidebar.success("🔍 策略对比模式: 已启用")
+# 显示历史记录数量
+scan_history_count = len(st.session_state.get('scan_history', []))
+if scan_history_count > 0:
+    st.sidebar.text(f"📚 历史记录: {scan_history_count} 条")
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
+if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary", help="使用当前选择的策略和参数进行扫描"):
     if not final_code_list:
         st.sidebar.error("请先加载股票！")
     else:
@@ -1800,7 +1769,7 @@ if 'scan_res' in st.session_state:
     # 修复：安全创建DataFrame，处理空结果的情况
     if results and len(results) > 0:
         try:
-            df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
+    df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
         except Exception as e:
             st.error(f"❌ 数据处理错误: {str(e)}")
             df_scan = pd.DataFrame()
@@ -2154,7 +2123,7 @@ with st.expander("📊 系统状态", expanded=False):
             st.metric("股票池总量", f"{len(st.session_state['full_pool']):,}")
         else:
             st.metric("股票池总量", "0")
-        
+    
         if 'scan_res' in st.session_state:
             st.metric("当前结果数", f"{len(st.session_state['scan_res']):,}")
         else:
