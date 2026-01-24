@@ -88,7 +88,7 @@ st.caption("✅ 系统已就绪 | 核心组件加载完成 | 支持6000股扫描
 try:
     import plotly.graph_objects as go
     import random
-    import yfinance as yf
+    import akshare as ak
     import pandas as pd
     import numpy as np
     import time
@@ -147,64 +147,66 @@ STRATEGY_LOGIC = {
 class QuantsEngine:
     def __init__(self):
         self.MAX_SCAN_LIMIT = 6000
-        # 预定义常用股票代码（A股主要股票）
-        self.common_stocks = self._get_common_stocks()
-    
-    def _get_common_stocks(self):
-        """获取常用A股代码列表"""
-        stocks = []
-        # 沪市主板 (600000-603999)
-        for i in range(600000, 604000, 10):  # 每隔10取一个，避免太多
-            stocks.append(f"{i:06d}")
-        # 深市主板 (000001-002999)
-        for i in range(1, 3000, 10):
-            stocks.append(f"{i:06d}")
-        # 创业板 (300001-300999)
-        for i in range(300001, 301000, 10):
-            stocks.append(f"{i:06d}")
-        return stocks[:500]  # 限制数量
+        self._stock_cache = None  # 缓存股票列表
     
     def clean_code(self, code):
-        """转换为yfinance格式: 600000 -> 600000.SS, 000001 -> 000001.SZ"""
+        """清理股票代码，保持6位数字格式"""
         code = str(code).strip().replace('sh.', '').replace('sz.', '')
-        if code.startswith('6'):
-            return f"{code}.SS"  # 上海
-        else:
-            return f"{code}.SZ"  # 深圳
+        code = code.replace('.SS', '').replace('.SZ', '')
+        return code
 
     def is_valid(self, code, name):
         """验证股票代码是否有效"""
-        code_clean = code.replace('.SS', '').replace('.SZ', '')
-        if code_clean.startswith('688'): return False  # 科创板
-        if code_clean.startswith('8') or code_clean.startswith('4'): return False  # 北交所
-        if "ST" in name: return False 
+        code = str(code).strip()
+        if code.startswith('688'): return False  # 科创板
+        if code.startswith('8') or code.startswith('4'): return False  # 北交所
+        if code.startswith('68'): return False  # 其他特殊板块
+        if "ST" in str(name): return False 
         return True
 
     def get_all_stocks(self):
-        """获取全市场股票（使用预定义列表）"""
+        """获取全市场股票（使用AKShare）"""
         try:
-            return [self.clean_code(code) for code in self.common_stocks[:500]]
+            # 获取A股实时行情数据
+            if self._stock_cache is None:
+                df = ak.stock_zh_a_spot_em()
+                # 筛选有效股票
+                valid_stocks = []
+                for _, row in df.iterrows():
+                    code = str(row['代码'])
+                    name = str(row['名称'])
+                    if self.is_valid(code, name):
+                        valid_stocks.append(code)
+                self._stock_cache = valid_stocks[:self.MAX_SCAN_LIMIT]
+            
+            return self._stock_cache
         except Exception as e:
             st.error(f"获取股票列表失败: {str(e)}")
-            return []
+            # 返回备用列表
+            return [f"{i:06d}" for i in list(range(600000, 600100)) + list(range(1, 100)) + list(range(300001, 300100))]
 
     def get_index_stocks(self, index_type="zz500"):
-        """获取指数成分股（使用预定义列表）"""
+        """获取指数成分股（使用AKShare）"""
         try:
             if index_type == "hs300":
-                # 沪深300成分股（示例）
-                stocks = [f"{i:06d}" for i in range(600000, 600050)] + \
-                         [f"{i:06d}" for i in range(1, 51)]
+                # 获取沪深300成分股
+                df = ak.index_stock_cons_csindex(symbol="000300")
+                stocks = df['成分券代码'].tolist()
             else:
-                # 中证500成分股（示例）
-                stocks = [f"{i:06d}" for i in range(600050, 600200, 3)] + \
-                         [f"{i:06d}" for i in range(100, 200, 2)] + \
-                         [f"{i:06d}" for i in range(300001, 300100, 2)]
+                # 获取中证500成分股
+                df = ak.index_stock_cons_csindex(symbol="000905")
+                stocks = df['成分券代码'].tolist()
             
-            return [self.clean_code(code) for code in stocks[:300]]
+            # 清理代码格式
+            stocks = [self.clean_code(code) for code in stocks]
+            return stocks[:500]
         except Exception as e:
             st.error(f"获取指数成分股失败: {str(e)}")
-            return []
+            # 返回备用列表
+            if index_type == "hs300":
+                return [f"{i:06d}" for i in range(600000, 600100)]
+            else:
+                return [f"{i:06d}" for i in range(600100, 600300)]
 
     def calc_winner_rate(self, df, current_price):
         if df.empty: return 0.0
@@ -266,57 +268,78 @@ class QuantsEngine:
 
     def _process_single_stock(self, code, max_price=None):
         try:
-            yf_code = self.clean_code(code)
-            
-            # 使用yfinance获取股票数据
-            ticker = yf.Ticker(yf_code)
+            code = self.clean_code(code)
             
             # 获取历史数据（150天）
-            df = ticker.history(period="6mo")  # 6个月数据
+            end_date = datetime.datetime.now().strftime("%Y%m%d")
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=180)).strftime("%Y%m%d")
+            
+            # 使用AKShare获取历史数据
+            df = ak.stock_zh_a_hist(symbol=code, period="daily", 
+                                   start_date=start_date, end_date=end_date, adjust="qfq")
             
             if df is None or len(df) < 60:
                 return None
             
             # 重命名列以匹配原有代码
-            df = df.reset_index()
-            df.columns = [col.lower() for col in df.columns]
-            df = df.rename(columns={'date': 'date'})
+            df.columns = ['date', 'open', 'close', 'high', 'low', 'volume', 'amount', 'amplitude', 'pctChg', 'chg', 'turn']
             
-            # 计算涨跌幅和换手率
-            df['pctChg'] = df['close'].pct_change() * 100
-            df['turn'] = 5.0  # yfinance不提供换手率，使用默认值
+            # 转换数据类型
+            df['close'] = pd.to_numeric(df['close'], errors='coerce')
+            df['open'] = pd.to_numeric(df['open'], errors='coerce')
+            df['high'] = pd.to_numeric(df['high'], errors='coerce')
+            df['low'] = pd.to_numeric(df['low'], errors='coerce')
+            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+            df['pctChg'] = pd.to_numeric(df['pctChg'], errors='coerce')
+            df['turn'] = pd.to_numeric(df['turn'], errors='coerce')
+            
+            # 清理无效数据
+            df = df.dropna(subset=['close', 'volume'])
             
             if len(df) < 60:
                 return None
             
-            # 获取股票信息
-            info_data = ticker.info
+            # 获取股票基本信息
+            try:
+                stock_info_df = ak.stock_individual_info_em(symbol=code)
+                name = code
+                industry = "-"
+                for _, row in stock_info_df.iterrows():
+                    if row['item'] == '股票简称':
+                        name = str(row['value'])
+                    elif row['item'] == '行业':
+                        industry = str(row['value'])
+            except:
+                name = code
+                industry = "-"
+            
             info = {
-                'name': info_data.get('longName', code)[:10] if info_data.get('longName') else code,
-                'industry': info_data.get('sector', '-')[:10] if info_data.get('sector') else '-',
+                'name': name[:10],
+                'industry': industry[:10],
                 'ipoDate': '2000-01-01'
             }
             
             # 验证股票有效性
-            if not self.is_valid(yf_code, info['name']):
+            if not self.is_valid(code, info['name']):
                 return None
             
             curr = df.iloc[-1]
             prev = df.iloc[-2]
             
             # 价格过滤
-            if max_price is not None and curr['close'] > max_price:
+            if max_price is not None and float(curr['close']) > max_price:
                 return None
             
             # 计算获利筹码
-            winner_rate = self.calc_winner_rate(df, curr['close'])
-            days_listed = 365  # 默认值，yfinance不提供上市日期
+            winner_rate = self.calc_winner_rate(df, float(curr['close']))
+            days_listed = 365
             
             # 计算均线
             df['MA5'] = df['close'].rolling(5).mean()
             df['MA20'] = df['close'].rolling(20).mean()
             df['MA200'] = df['close'].rolling(200).mean() if len(df) >= 200 else pd.Series([None] * len(df))
-            risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
+            risk_level = self.calc_risk_level(float(curr['close']), float(df['MA5'].iloc[-1]) if not pd.isna(df['MA5'].iloc[-1]) else 0, 
+                                            float(df['MA20'].iloc[-1]) if not pd.isna(df['MA20'].iloc[-1]) else 0)
         except Exception as e:
             return None
 
@@ -470,23 +493,29 @@ class QuantsEngine:
         return results, alerts, valid_codes_list
 
     def get_deep_data(self, code):
-        """获取深度数据 - yfinance版本"""
+        """获取深度数据 - AKShare版本"""
         try:
-            yf_code = self.clean_code(code)
-            ticker = yf.Ticker(yf_code)
+            code = self.clean_code(code)
             
             # 获取6个月历史数据
-            df = ticker.history(period="6mo")
+            end_date = datetime.datetime.now().strftime("%Y%m%d")
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=180)).strftime("%Y%m%d")
+            
+            df = ak.stock_zh_a_hist(symbol=code, period="daily", 
+                                   start_date=start_date, end_date=end_date, adjust="qfq")
             
             if df is None or len(df) < 20:
                 return None
             
-            # 重置索引并重命名列
-            df = df.reset_index()
-            df.columns = [col.lower() for col in df.columns]
+            # 重命名列
+            df.columns = ['date', 'open', 'close', 'high', 'low', 'volume', 'amount', 'amplitude', 'pctChg', 'chg', 'turn']
             
             # 只保留需要的列
             df = df[['date', 'open', 'close', 'high', 'low', 'volume']]
+            
+            # 转换数据类型
+            for col in ['open', 'close', 'high', 'low', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
             
             # 清理无效数据
             df = df.dropna(subset=['close', 'volume'])
