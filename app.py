@@ -15,6 +15,16 @@ def get_password():
         password = "vip666888"
     return password
 
+# ==========================================
+# ⚠️ 核心配置（必须在最前面）
+# ==========================================
+st.set_page_config(
+    page_title="V45 完美说明书版", 
+    layout="wide", 
+    page_icon="🛡️",
+    initial_sidebar_state="expanded"
+)
+
 # 获取密码并计算哈希值
 PASSWORD = get_password()
 PASSWORD_HASH = hashlib.sha256(PASSWORD.encode()).hexdigest()
@@ -67,17 +77,7 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# ⚠️ 核心配置
-# ==========================================
-st.set_page_config(
-    page_title="V45 完美说明书版", 
-    layout="wide", 
-    page_icon="🛡️",
-    initial_sidebar_state="expanded"
-)
-
-# ==========================================
-# 🆕 V45 新功能提示（必须显示在最前面）
+# 🆕 V45 新功能提示
 # ==========================================
 st.markdown("""
 <div style='background-color: #00ff00; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
