@@ -1,26 +1,61 @@
 import streamlit as st
+import hashlib
 
 # ==========================================
-# 🔐 密码保护模块
+# 🔐 密码保护模块（增强版 - 使用Secrets）
 # ==========================================
-PASSWORD = "vip666888"
+
+def get_password():
+    """从Secrets获取密码，如果没有则使用默认值"""
+    try:
+        # 尝试从Streamlit Secrets获取密码
+        password = st.secrets.get("PASSWORD", "vip666888")
+    except:
+        # 如果Secrets不存在（本地运行），使用默认值
+        password = "vip666888"
+    return password
+
+# 获取密码并计算哈希值
+PASSWORD = get_password()
+PASSWORD_HASH = hashlib.sha256(PASSWORD.encode()).hexdigest()
 
 def check_password():
-    """密码验证函数"""
+    """密码验证函数（增强版）"""
     if 'password_correct' not in st.session_state:
         st.session_state.password_correct = False
+    
+    # 限制登录尝试次数
+    if 'login_attempts' not in st.session_state:
+        st.session_state.login_attempts = 0
+    
+    # 如果尝试次数过多，阻止访问
+    if st.session_state.login_attempts >= 5:
+        st.error("❌ 登录尝试次数过多，请稍后再试或联系管理员")
+        st.info("💡 提示：如果忘记密码，请联系系统管理员")
+        st.stop()
     
     if not st.session_state.password_correct:
         st.title("🔐 系统访问验证")
         st.markdown("---")
+        st.info("💡 请输入访问密码以继续使用系统")
+        
         password_input = st.text_input("请输入访问密码:", type="password", key="pwd_input")
         
         if st.button("🔓 验证", type="primary"):
-            if password_input == PASSWORD:
+            # 使用哈希验证（更安全）
+            input_hash = hashlib.sha256(password_input.encode()).hexdigest()
+            if input_hash == PASSWORD_HASH:
                 st.session_state.password_correct = True
+                st.session_state.login_attempts = 0
+                st.success("✅ 验证成功！")
                 st.rerun()
             else:
-                st.error("❌ 密码错误，请重试！")
+                st.session_state.login_attempts += 1
+                remaining = 5 - st.session_state.login_attempts
+                if remaining > 0:
+                    st.error(f"❌ 密码错误，请重试！（剩余尝试次数：{remaining}）")
+                else:
+                    st.error("❌ 登录尝试次数已达上限，请稍后再试")
                 st.stop()
         else:
             st.stop()
