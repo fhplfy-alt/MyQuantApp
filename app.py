@@ -76,7 +76,11 @@ STRATEGY_LOGIC = {
     "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
     "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
     "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
-    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
+    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价",
+    "💎 RSI超卖反弹": "RSI<30后回升至35以上,超跌反弹机会",
+    "📊 布林带突破": "价格突破布林带上轨+成交量放大",
+    "🎯 KDJ金叉": "K线上穿D线+RSI>50,短期买入信号",
+    "📉 200日均线趋势": "价格站上200日均线+均线向上,长期上升趋势"
 }
 
 # ==========================================
@@ -105,7 +109,7 @@ class QuantsEngine:
             rs = bs.query_all_stock()
             stocks = []
             data_list = []
-            while (rs.error_code == '0') & rs.next():
+            while (rs.error_code == '0') and rs.next():
                 data_list.append(rs.get_row_data())
             
             for data in data_list:
@@ -142,6 +146,50 @@ class QuantsEngine:
         if bias > 15: return "High (高危)"
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
+    
+    def calc_rsi(self, df, period=14):
+        """计算RSI相对强弱指标"""
+        try:
+            if len(df) < period + 1:
+                return None
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else None
+        except:
+            return None
+    
+    def calc_kdj(self, df, period=9):
+        """计算KDJ指标"""
+        try:
+            if len(df) < period + 1:
+                return None, None, None
+            low_min = df['low'].rolling(window=period).min()
+            high_max = df['high'].rolling(window=period).max()
+            rsv = (df['close'] - low_min) / (high_max - low_min) * 100
+            
+            k = rsv.ewm(com=2, adjust=False).mean()
+            d = k.ewm(com=2, adjust=False).mean()
+            j = 3 * k - 2 * d
+            
+            return k.iloc[-1], d.iloc[-1], j.iloc[-1]
+        except:
+            return None, None, None
+    
+    def calc_bollinger(self, df, period=20, std_dev=2):
+        """计算布林带指标"""
+        try:
+            if len(df) < period:
+                return None, None, None
+            ma = df['close'].rolling(window=period).mean()
+            std = df['close'].rolling(window=period).std()
+            upper = ma + (std * std_dev)
+            lower = ma - (std * std_dev)
+            return upper.iloc[-1], ma.iloc[-1], lower.iloc[-1]
+        except:
+            return None, None, None
 
     def _process_single_stock(self, code, max_price=None):
         # 保持你原始的策略判定逻辑不变
@@ -177,11 +225,17 @@ class QuantsEngine:
         winner_rate = self.calc_winner_rate(df, curr['close'])
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA20'] = df['close'].rolling(20).mean()
+        df['MA200'] = df['close'].rolling(200).mean() if len(df) >= 200 else pd.Series([None] * len(df))
         risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
+
+        # 计算技术指标
+        rsi = self.calc_rsi(df)
+        k, d, j = self.calc_kdj(df)
+        bb_upper, bb_mid, bb_lower = self.calc_bollinger(df)
 
         signal_tags, priority, action = [], 0, "WAIT (观望)"
 
-        # 策略原样保留
+        # 原有策略保留
         if (all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62):
             signal_tags.append("🔴温和吸筹"); priority = 60; action = "BUY (低吸)"
 
@@ -195,8 +249,53 @@ class QuantsEngine:
         recent_20 = df.tail(20)
         has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
         is_double_vol = (curr['volume'] > prev['volume'] * 1.8)
-        if has_limit_up_20 and is_double_vol: # 简化示例，保留你原有的复杂判断逻辑
+        if has_limit_up_20 and is_double_vol:
             signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
+
+        # 新增策略：RSI超卖反弹
+        if rsi is not None and len(df) >= 2:
+            prev_rsi = self.calc_rsi(df.iloc[:-1])
+            if prev_rsi is not None and prev_rsi < 30 and rsi > 35:
+                signal_tags.append("💎RSI超卖反弹")
+                priority = max(priority, 65)
+                if action in ["WAIT (观望)", "HOLD (持有)"]:
+                    action = "BUY (低吸)"
+
+        # 新增策略：布林带突破
+        if bb_upper is not None and bb_lower is not None:
+            if curr['close'] > bb_upper and curr['volume'] > df['volume'].tail(20).mean() * 1.2:
+                signal_tags.append("📊布林带突破")
+                priority = max(priority, 75)
+                if action in ["WAIT (观望)", "HOLD (持有)"]:
+                    action = "BUY (博弈)"
+
+        # 新增策略：KDJ金叉
+        if k is not None and d is not None:
+            if len(df) >= 2:
+                prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1])
+                if prev_k is not None and prev_d is not None:
+                    if prev_k <= prev_d and k > d and rsi is not None and rsi > 50:
+                        signal_tags.append("🎯KDJ金叉")
+                        priority = max(priority, 70)
+                        if action in ["WAIT (观望)", "HOLD (持有)"]:
+                            action = "BUY (博弈)"
+
+        # 新增策略：200日均线趋势
+        if len(df) >= 200 and not pd.isna(df['MA200'].iloc[-1]):
+            ma200_current = df['MA200'].iloc[-1]
+            ma200_prev = df['MA200'].iloc[-2] if len(df) >= 201 else ma200_current
+            if curr['close'] > ma200_current and ma200_current > ma200_prev:
+                signal_tags.append("📉200日均线趋势")
+                priority = max(priority, 80)
+                if action in ["WAIT (观望)", "HOLD (持有)", "BUY (低吸)"]:
+                    action = "BUY (低吸)" if action == "WAIT (观望)" else action
+
+        # 多头排列策略
+        if prev['close'] > prev['open'] and curr['close'] > prev['close']:
+            signal_tags.append("📈多头排列")
+            priority = max(priority, 50)
+            if action == "WAIT (观望)":
+                action = "HOLD (持有)"
 
         if priority == 0: return None
 
@@ -249,23 +348,244 @@ class QuantsEngine:
         except: return None
 
     def run_ai_prediction(self, df):
-        """修复白屏：增加异常处理"""
-        if df is None or len(df) < 20: return None
+        """增强版AI预测：预估后三天股票走势，包括价格、涨跌幅等"""
+        if df is None or len(df) < 30: return None
         try:
-            recent = df.tail(20).reset_index(drop=True)
+            # 使用更多历史数据提高预测准确性
+            recent = df.tail(30).reset_index(drop=True)
             X = np.array(recent.index).reshape(-1, 1)
             y = recent['close'].values
+            
+            # 训练模型
             model = LinearRegression().fit(X, y)
-            pred = model.predict([[20], [21], [22]])
-            return {"dates": ["T+1", "T+2", "T+3"], "prices": pred, "pred_price": pred[0], "color": "red", "title": "AI 推演中", "desc": "趋势分析", "action": "建议持股"}
-        except: return None
+            
+            # 预测后三天价格
+            next_indices = np.array([[len(recent)], [len(recent)+1], [len(recent)+2]])
+            pred_prices = model.predict(next_indices)
+            
+            # 计算当前价格
+            current_price = df['close'].iloc[-1]
+            
+            # 计算涨跌幅
+            changes = [(p - current_price) / current_price * 100 for p in pred_prices]
+            
+            # 生成日期（后三天）
+            last_date = pd.to_datetime(df['date'].iloc[-1])
+            dates = []
+            for i in range(1, 4):
+                next_date = last_date + datetime.timedelta(days=i)
+                # 跳过周末
+                while next_date.weekday() >= 5:  # 5=Saturday, 6=Sunday
+                    next_date += datetime.timedelta(days=1)
+                dates.append(next_date.strftime("%m-%d"))
+            
+            # 判断趋势
+            avg_change = np.mean(changes)
+            if avg_change > 2:
+                color = "green"
+                title = "📈 AI预测：上涨趋势"
+                desc = f"预计未来三天平均涨幅 {avg_change:.2f}%"
+                action = "建议持有或逢低买入"
+            elif avg_change < -2:
+                color = "red"
+                title = "📉 AI预测：下跌趋势"
+                desc = f"预计未来三天平均跌幅 {abs(avg_change):.2f}%"
+                action = "建议谨慎观望或减仓"
+            else:
+                color = "orange"
+                title = "➡️ AI预测：震荡整理"
+                desc = f"预计未来三天波动较小，平均变化 {abs(avg_change):.2f}%"
+                action = "建议持有观望"
+            
+            return {
+                "dates": dates,
+                "prices": pred_prices.tolist(),
+                "changes": changes,
+                "pred_price": pred_prices[0],
+                "current_price": current_price,
+                "color": color,
+                "title": title,
+                "desc": desc,
+                "action": action
+            }
+        except Exception as e:
+            return None
 
     def plot_professional_kline(self, df, title):
-        """修复白屏：确保 Plotly 不会因为空数据崩溃"""
+        """增强版K线图：添加买卖信号标记"""
         if df is None or df.empty: return None
-        fig = go.Figure(data=[go.Candlestick(x=df['date'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='K线')])
-        fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=500)
-        return fig
+        
+        try:
+            # 计算技术指标
+            df['MA5'] = df['close'].rolling(5).mean()
+            df['MA20'] = df['close'].rolling(20).mean()
+            df['MA200'] = df['close'].rolling(200).mean() if len(df) >= 200 else None
+            
+            # 计算RSI和KDJ用于信号判断
+            rsi = self.calc_rsi(df)
+            k, d, j = self.calc_kdj(df)
+            bb_upper, bb_mid, bb_lower = self.calc_bollinger(df)
+            
+            # 创建K线图
+            fig = go.Figure()
+            
+            # 添加K线
+            fig.add_trace(go.Candlestick(
+                x=df['date'],
+                open=df['open'],
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
+                name='K线'
+            ))
+            
+            # 添加均线
+            if 'MA5' in df.columns:
+                fig.add_trace(go.Scatter(
+                    x=df['date'],
+                    y=df['MA5'],
+                    mode='lines',
+                    name='MA5',
+                    line=dict(color='yellow', width=1)
+                ))
+            
+            if 'MA20' in df.columns:
+                fig.add_trace(go.Scatter(
+                    x=df['date'],
+                    y=df['MA20'],
+                    mode='lines',
+                    name='MA20',
+                    line=dict(color='blue', width=1)
+                ))
+            
+            if df['MA200'] is not None and not df['MA200'].isna().all():
+                fig.add_trace(go.Scatter(
+                    x=df['date'],
+                    y=df['MA200'],
+                    mode='lines',
+                    name='MA200',
+                    line=dict(color='purple', width=1)
+                ))
+            
+            # 添加布林带
+            if bb_upper is not None and bb_lower is not None:
+                # 计算布林带数据
+                period = 20
+                if len(df) >= period:
+                    ma = df['close'].rolling(window=period).mean()
+                    std = df['close'].rolling(window=period).std()
+                    upper = ma + (std * 2)
+                    lower = ma - (std * 2)
+                    
+                    fig.add_trace(go.Scatter(
+                        x=df['date'],
+                        y=upper,
+                        mode='lines',
+                        name='布林上轨',
+                        line=dict(color='gray', width=1, dash='dash'),
+                        showlegend=False
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=df['date'],
+                        y=lower,
+                        mode='lines',
+                        name='布林下轨',
+                        line=dict(color='gray', width=1, dash='dash'),
+                        fill='tonexty',
+                        fillcolor='rgba(128,128,128,0.1)',
+                        showlegend=False
+                    ))
+            
+            # 识别买卖信号
+            buy_signals = []
+            sell_signals = []
+            
+            for i in range(1, len(df)):
+                curr = df.iloc[i]
+                prev = df.iloc[i-1]
+                
+                # 买入信号
+                # 1. MA5上穿MA20（金叉）
+                if i >= 20:
+                    if prev['MA5'] <= prev['MA20'] and curr['MA5'] > curr['MA20']:
+                        buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98))
+                
+                # 2. RSI超卖反弹
+                if i >= 15:
+                    curr_rsi = self.calc_rsi(df.iloc[:i+1])
+                    prev_rsi = self.calc_rsi(df.iloc[:i])
+                    if prev_rsi is not None and curr_rsi is not None:
+                        if prev_rsi < 30 and curr_rsi > 35:
+                            buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98))
+                
+                # 3. KDJ金叉
+                if i >= 10:
+                    curr_k, curr_d, _ = self.calc_kdj(df.iloc[:i+1])
+                    prev_k, prev_d, _ = self.calc_kdj(df.iloc[:i])
+                    if prev_k is not None and prev_d is not None and curr_k is not None and curr_d is not None:
+                        if prev_k <= prev_d and curr_k > curr_d:
+                            buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98))
+                
+                # 卖出信号
+                # 1. MA5下穿MA20（死叉）
+                if i >= 20:
+                    if prev['MA5'] >= prev['MA20'] and curr['MA5'] < curr['MA20']:
+                        sell_signals.append((df['date'].iloc[i], curr['high'] * 1.02))
+            
+            # 添加买入信号标记
+            if buy_signals:
+                buy_dates, buy_prices = zip(*buy_signals)
+                fig.add_trace(go.Scatter(
+                    x=list(buy_dates),
+                    y=list(buy_prices),
+                    mode='markers',
+                    name='买入信号',
+                    marker=dict(
+                        symbol='triangle-up',
+                        size=12,
+                        color='red',
+                        line=dict(width=2, color='darkred')
+                    )
+                ))
+            
+            # 添加卖出信号标记
+            if sell_signals:
+                sell_dates, sell_prices = zip(*sell_signals)
+                fig.add_trace(go.Scatter(
+                    x=list(sell_dates),
+                    y=list(sell_prices),
+                    mode='markers',
+                    name='卖出信号',
+                    marker=dict(
+                        symbol='triangle-down',
+                        size=12,
+                        color='green',
+                        line=dict(width=2, color='darkgreen')
+                    )
+                ))
+            
+            # 更新布局
+            fig.update_layout(
+                title=title,
+                xaxis_rangeslider_visible=False,
+                height=600,
+                hovermode='x unified',
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            return fig
+        except Exception as e:
+            # 如果出错，返回基础K线图
+            fig = go.Figure(data=[go.Candlestick(
+                x=df['date'],
+                open=df['open'],
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
+                name='K线'
+            )])
+            fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=500)
+            return fig
 
 # ==========================================
 # 3. 界面 UI (完全恢复原布局)
@@ -307,16 +627,90 @@ if st.session_state['scan_res']:
     df_scan = pd.DataFrame(st.session_state['scan_res']).sort_values(by="priority", ascending=False)
     st.dataframe(df_scan, hide_index=True)
 
-# 深度分析 (修复逻辑)
+# 深度分析 (增强版)
 if st.session_state['valid_options']:
     st.subheader("🧠 深度分析")
     target = st.selectbox("选择目标进行深度分析", st.session_state['valid_options'])
-    if st.button(f"🚀 立即分析 {target}"):
-        df = engine.get_deep_data(target.split("|")[0].strip())
-        if df is not None:
-            st.plotly_chart(engine.plot_professional_kline(df, target))
-            future = engine.run_ai_prediction(df)
-            if future: st.success(f"AI 预测价格: {future['pred_price']:.2f}")
-        else: st.error("数据获取失败，请重试")
+    target_code = target.split("|")[0].strip()
+    target_name = target.split("|")[1].strip() if "|" in target else target
+    
+    if st.button(f"🚀 立即分析 {target_name}", type="primary"):
+        with st.spinner("正在获取数据并分析..."):
+            df = engine.get_deep_data(target_code)
+            if df is not None and not df.empty:
+                # 显示K线图（带买卖信号）
+                st.markdown("### 📊 K线分析（含买卖信号）")
+                fig = engine.plot_professional_kline(df, f"{target_name} - K线图")
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.info("""
+                    💡 **图例说明**: 
+                    - 🔺 **红色向上三角** = 买入信号（金叉、RSI超卖反弹、KDJ金叉等）
+                    - 🔻 **绿色向下三角** = 卖出信号（死叉等）
+                    - **黄色线** = MA5均线
+                    - **蓝色线** = MA20均线
+                    - **紫色线** = MA200均线（如有足够数据）
+                    - 信号仅供参考，投资需谨慎
+                    """)
+                
+                # 显示AI预测（后三天走势）
+                st.markdown("### 🤖 AI预测：未来三天走势")
+                future = engine.run_ai_prediction(df)
+                if future:
+                    col1, col2, col3 = st.columns(3)
+                    
+                    # 显示当前价格
+                    current_price = future['current_price']
+                    col1.metric("当前价格", f"¥{current_price:.2f}")
+                    
+                    # 显示预测信息
+                    if future['color'] == 'green':
+                        st.success(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                    elif future['color'] == 'red':
+                        st.error(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                    else:
+                        st.warning(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                    
+                    # 显示后三天详细预测
+                    st.markdown("#### 📅 未来三天价格预测")
+                    pred_cols = st.columns(3)
+                    for i in range(3):
+                        pred_price = future['prices'][i]
+                        change = future['changes'][i]
+                        date_label = future['dates'][i]
+                        
+                        with pred_cols[i]:
+                            if change > 0:
+                                st.metric(
+                                    label=f"T+{i+1} ({date_label})",
+                                    value=f"¥{pred_price:.2f}",
+                                    delta=f"+{change:.2f}%",
+                                    delta_color="inverse"
+                                )
+                            else:
+                                st.metric(
+                                    label=f"T+{i+1} ({date_label})",
+                                    value=f"¥{pred_price:.2f}",
+                                    delta=f"{change:.2f}%",
+                                    delta_color="normal"
+                                )
+                    
+                    # 显示预测数据表格
+                    with st.expander("📋 查看详细预测数据"):
+                        pred_df = pd.DataFrame({
+                            '日期': [f"T+{i+1} ({future['dates'][i]})" for i in range(3)],
+                            '预测价格': [f"¥{p:.2f}" for p in future['prices']],
+                            '涨跌幅': [f"{c:+.2f}%" for c in future['changes']],
+                            '相对当前价': [f"{((p - current_price) / current_price * 100):+.2f}%" for p in future['prices']]
+                        })
+                        st.dataframe(pred_df, hide_index=True)
+                else:
+                    st.warning("⚠️ AI预测数据不足，无法生成预测")
+                
+                # 显示最近交易数据
+                with st.expander("📋 查看最近交易数据"):
+                    st.dataframe(df.tail(20), hide_index=True)
+            else:
+                st.error("❌ 数据获取失败，请重试")
 
 st.caption("💡 使用提示：扫描时请勿刷新页面。投资有风险。")
