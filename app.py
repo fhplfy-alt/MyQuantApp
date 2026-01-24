@@ -118,7 +118,6 @@ class QuantsEngine:
         if "ST" in name: return False 
         return True
 
-    @st.cache_data(ttl=3600)  # 缓存1小时
     def get_all_stocks(self):
         """获取全市场股票，最多6000只"""
         try:
@@ -145,7 +144,6 @@ class QuantsEngine:
                 pass
             return []
 
-    @st.cache_data(ttl=3600)  # 缓存1小时
     def get_index_stocks(self, index_type="zz500"):
         bs.login()
         stocks = []
@@ -651,15 +649,67 @@ class QuantsEngine:
             
             # 创建信号列，但安全处理
             df['Signal'] = 0
+            df['BuySignal'] = 0  # 买入信号强度
+            df['SellSignal'] = 0  # 卖出信号强度
+            
+            # 1. MA5/MA20金叉死叉
             if 'MA5' in df.columns and 'MA20' in df.columns:
                 try:
                     df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 
                     df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 
+                    df.loc[df['Signal'] == 1, 'BuySignal'] = 1
+                    df.loc[df['Signal'] == -1, 'SellSignal'] = 1
+                except Exception:
+                    pass
+            
+            # 2. RSI超卖反弹买入信号
+            if 'RSI' in df.columns:
+                try:
+                    for i in range(1, len(df)):
+                        if pd.notna(df.iloc[i]['RSI']) and pd.notna(df.iloc[i-1]['RSI']):
+                            if df.iloc[i-1]['RSI'] < 30 and df.iloc[i]['RSI'] > 35:
+                                df.iloc[i, df.columns.get_loc('BuySignal')] = max(df.iloc[i]['BuySignal'], 2)
+                except Exception:
+                    pass
+            
+            # 3. KDJ金叉买入信号
+            if 'K' in df.columns and 'D' in df.columns:
+                try:
+                    for i in range(1, len(df)):
+                        if pd.notna(df.iloc[i]['K']) and pd.notna(df.iloc[i]['D']) and \
+                           pd.notna(df.iloc[i-1]['K']) and pd.notna(df.iloc[i-1]['D']):
+                            if df.iloc[i-1]['K'] <= df.iloc[i-1]['D'] and df.iloc[i]['K'] > df.iloc[i]['D']:
+                                if 'RSI' in df.columns and pd.notna(df.iloc[i]['RSI']) and df.iloc[i]['RSI'] > 50:
+                                    df.iloc[i, df.columns.get_loc('BuySignal')] = max(df.iloc[i]['BuySignal'], 2)
+                except Exception:
+                    pass
+            
+            # 4. 布林带突破买入信号
+            if 'BB_Upper' in df.columns and 'BB_Lower' in df.columns:
+                try:
+                    for i in range(1, len(df)):
+                        if pd.notna(df.iloc[i]['BB_Upper']) and pd.notna(df.iloc[i]['close']):
+                            if df.iloc[i]['close'] > df.iloc[i]['BB_Upper']:
+                                # 检查成交量是否放大
+                                if i >= 20:
+                                    vol_avg = df.iloc[i-20:i]['volume'].mean()
+                                    if df.iloc[i]['volume'] > vol_avg * 1.2:
+                                        df.iloc[i, df.columns.get_loc('BuySignal')] = max(df.iloc[i]['BuySignal'], 2)
+                except Exception:
+                    pass
+            
+            # 5. 200日均线趋势买入信号
+            if 'MA200' in df.columns:
+                try:
+                    for i in range(1, len(df)):
+                        if pd.notna(df.iloc[i]['MA200']) and pd.notna(df.iloc[i-1]['MA200']):
+                            if df.iloc[i]['close'] > df.iloc[i]['MA200'] and df.iloc[i]['MA200'] > df.iloc[i-1]['MA200']:
+                                df.iloc[i, df.columns.get_loc('BuySignal')] = max(df.iloc[i]['BuySignal'], 3)
                 except Exception:
                     pass
 
-            buy_points = df[df['Signal'] == 1]
-            sell_points = df[df['Signal'] == -1]
+            buy_points = df[df['BuySignal'] > 0]
+            sell_points = df[df['SellSignal'] > 0]
 
             fig = go.Figure()
             fig.add_trace(go.Candlestick(
@@ -689,20 +739,67 @@ class QuantsEngine:
                 except:
                     pass
 
-            # 安全添加买卖点
+            # 安全添加买卖点 - 增强版
             if not buy_points.empty:
                 try:
-                    fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', 
-                                           marker=dict(symbol='triangle-up', size=12, color='red'), 
-                                           text='B', textposition='bottom center', name='买入'))
+                    # 根据信号强度分组显示
+                    strong_buy = buy_points[buy_points['BuySignal'] >= 3]
+                    medium_buy = buy_points[(buy_points['BuySignal'] >= 2) & (buy_points['BuySignal'] < 3)]
+                    weak_buy = buy_points[buy_points['BuySignal'] == 1]
+                    
+                    # 强买入信号（红色，大标记）
+                    if not strong_buy.empty:
+                        fig.add_trace(go.Scatter(
+                            x=strong_buy['date'], 
+                            y=strong_buy['low']*0.97, 
+                            mode='markers+text', 
+                            marker=dict(symbol='triangle-up', size=16, color='red', line=dict(width=2, color='darkred')), 
+                            text='强买', 
+                            textposition='bottom center', 
+                            name='强买入',
+                            hovertemplate='<b>强买入信号</b><br>日期: %{x}<br>价格: %{y:.2f}<extra></extra>'
+                        ))
+                    
+                    # 中等买入信号（橙色）
+                    if not medium_buy.empty:
+                        fig.add_trace(go.Scatter(
+                            x=medium_buy['date'], 
+                            y=medium_buy['low']*0.97, 
+                            mode='markers+text', 
+                            marker=dict(symbol='triangle-up', size=14, color='orange', line=dict(width=1, color='darkorange')), 
+                            text='买入', 
+                            textposition='bottom center', 
+                            name='买入',
+                            hovertemplate='<b>买入信号</b><br>日期: %{x}<br>价格: %{y:.2f}<extra></extra>'
+                        ))
+                    
+                    # 弱买入信号（黄色）
+                    if not weak_buy.empty:
+                        fig.add_trace(go.Scatter(
+                            x=weak_buy['date'], 
+                            y=weak_buy['low']*0.97, 
+                            mode='markers+text', 
+                            marker=dict(symbol='triangle-up', size=12, color='yellow', line=dict(width=1, color='orange')), 
+                            text='B', 
+                            textposition='bottom center', 
+                            name='金叉买入',
+                            hovertemplate='<b>金叉买入</b><br>日期: %{x}<br>价格: %{y:.2f}<extra></extra>'
+                        ))
                 except Exception:
                     pass
             
             if not sell_points.empty:
                 try:
-                    fig.add_trace(go.Scatter(x=sell_points['date'], y=sell_points['high']*1.02, mode='markers+text', 
-                                           marker=dict(symbol='triangle-down', size=12, color='green'), 
-                                           text='S', textposition='top center', name='卖出'))
+                    fig.add_trace(go.Scatter(
+                        x=sell_points['date'], 
+                        y=sell_points['high']*1.03, 
+                        mode='markers+text', 
+                        marker=dict(symbol='triangle-down', size=12, color='green', line=dict(width=1, color='black')), 
+                        text='卖出', 
+                        textposition='top center', 
+                        name='卖出信号',
+                        hovertemplate='<b>卖出信号</b><br>日期: %{x}<br>价格: %{y:.2f}<extra></extra>'
+                    ))
                 except Exception:
                     pass
 
@@ -742,14 +839,20 @@ if pool_mode == "手动输入":
 else:
     if st.sidebar.button(f"📥 加载 {pool_mode} 成分股"):
         with st.spinner("正在获取成分股..."):
-            if pool_mode == "全市场扫描":
-                stock_list = engine.get_all_stocks()
-            elif "中证500" in pool_mode:
-                index_code = "zz500"
-                stock_list = engine.get_index_stocks(index_code)
+            # 使用缓存键
+            cache_key = f"stock_list_{pool_mode}"
+            if cache_key not in st.session_state:
+                if pool_mode == "全市场扫描":
+                    stock_list = engine.get_all_stocks()
+                elif "中证500" in pool_mode:
+                    index_code = "zz500"
+                    stock_list = engine.get_index_stocks(index_code)
+                else:
+                    index_code = "hs300"
+                    stock_list = engine.get_index_stocks(index_code)
+                st.session_state[cache_key] = stock_list
             else:
-                index_code = "hs300"
-                stock_list = engine.get_index_stocks(index_code)
+                stock_list = st.session_state[cache_key]
             
             if stock_list:
                 st.session_state['full_pool'] = stock_list 
@@ -866,9 +969,23 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
                         st.markdown("### 📅 AI 时空推演 (未来3日)")
                         d_cols = st.columns(3)
                         for i in range(3):
-                            d_cols[i].metric(label=future_info['dates'][i], 
-                                           value=f"¥{future_info['prices'][i]:.2f}", 
-                                           delta="预测")
+                            pred_price = future_info['prices'][i]
+                            price_change = pred_price - last['close']
+                            price_change_pct = (price_change / last['close'] * 100) if last['close'] > 0 else 0
+                            
+                            # 根据涨跌设置颜色
+                            delta_color = "normal"
+                            if price_change_pct > 0:
+                                delta_color = "inverse"
+                            elif price_change_pct < 0:
+                                delta_color = "normal"
+                            
+                            d_cols[i].metric(
+                                label=future_info['dates'][i], 
+                                value=f"¥{pred_price:.2f}", 
+                                delta=f"{price_change:+.2f} ({price_change_pct:+.2f}%)",
+                                delta_color=delta_color
+                            )
                     else:
                         col2.metric("AI预测明日", f"¥{last['close']:.2f}", delta="数据不足")
                         st.warning("⚠️ 数据不足以进行AI预测，显示当前价格")
@@ -881,7 +998,12 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
                     
                     if fig:
                         st.plotly_chart(fig, width='stretch')
-                        st.info("💡 **图例**: 🔺红色B=金叉买点 | 🔻绿色S=死叉卖点 (仅供辅助参考)")
+                        st.info("""
+                        💡 **图例说明**: 
+                        - 🔺 **红色强买/橙色买入/黄色B** = 买入信号（红色=200日均线趋势，橙色=RSI/KDJ/布林带，黄色=MA金叉）
+                        - 🔻 **绿色卖出** = 卖出信号（MA死叉）
+                        - 信号仅供参考，投资需谨慎
+                        """)
                     else:
                         st.warning("⚠️ 无法生成K线图，数据可能不足")
                         
