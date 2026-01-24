@@ -5,18 +5,8 @@ import hashlib
 # 🔐 密码保护模块（增强版 - 使用Secrets）
 # ==========================================
 
-def get_password():
-    """从Secrets获取密码，如果没有则使用默认值"""
-    try:
-        # 尝试从Streamlit Secrets获取密码
-        password = st.secrets.get("PASSWORD", "vip666888")
-    except:
-        # 如果Secrets不存在（本地运行），使用默认值
-        password = "vip666888"
-    return password
-
 # ==========================================
-# ⚠️ 核心配置（必须在最前面）
+# ⚠️ 核心配置（必须在最前面，在任何其他streamlit命令之前）
 # ==========================================
 st.set_page_config(
     page_title="V45 完美说明书版", 
@@ -24,6 +14,19 @@ st.set_page_config(
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
+
+def get_password():
+    """从Secrets获取密码，如果没有则使用默认值"""
+    try:
+        # 尝试从Streamlit Secrets获取密码
+        if hasattr(st, 'secrets') and st.secrets is not None:
+            password = st.secrets.get("PASSWORD", "vip666888")
+        else:
+            password = "vip666888"
+    except Exception:
+        # 如果Secrets不存在（本地运行），使用默认值
+        password = "vip666888"
+    return password
 
 # 获取密码并计算哈希值
 PASSWORD = get_password()
