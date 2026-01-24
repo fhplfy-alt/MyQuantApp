@@ -79,6 +79,30 @@ st.set_page_config(
 st.title("🛡️ V45 智能量化系统 (全信号图例版)")
 st.caption("✅ 系统已就绪 | 核心组件加载完成 | 支持6000股扫描 | V45 Build")
 
+# 新功能提示
+with st.expander("🆕 V45 重要新功能说明", expanded=False):
+    col_new1, col_new2, col_new3 = st.columns(3)
+    
+    with col_new1:
+        st.markdown("**🔀 多策略并行扫描**")
+        st.write("• 9种策略可选")
+        st.write("• 策略对比分析")
+        st.write("• 命中统计展示")
+    
+    with col_new2:
+        st.markdown("**⚙️ 策略参数自定义**")
+        st.write("• 调整均线周期")
+        st.write("• 设置RSI阈值")
+        st.write("• 自定义技术指标")
+    
+    with col_new3:
+        st.markdown("**📈 回测 & 导出功能**")
+        st.write("• 历史回测验证")
+        st.write("• Excel/CSV导出")
+        st.write("• 扫描历史记录")
+    
+    st.info("💡 **使用提示**: 在左侧边栏中找到对应的配置面板来使用这些新功能！")
+
 # ==========================================
 # 1. 安全导入
 # ==========================================
@@ -1492,6 +1516,10 @@ if 'scan_history' not in st.session_state:
     st.session_state['scan_history'] = []
 
 st.sidebar.header("🕹️ 控制台")
+
+# 快速功能提示
+st.sidebar.success("🆕 V45新功能已启用！请查看下方配置面板")
+
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
 
 pool_mode = st.sidebar.radio("🔎 选股范围:", ("中证500 (中小盘)", "沪深300 (大盘)", "全市场扫描", "手动输入"))
@@ -1538,27 +1566,28 @@ else:
 # 多策略选择面板
 # ==========================================
 st.sidebar.markdown("---")
-with st.sidebar.expander("🔀 多策略配置", expanded=False):
-    st.markdown("##### 🎯 选择扫描策略")
-    
+st.sidebar.markdown("### 🔀 多策略配置")
+with st.sidebar.expander("🎯 策略选择与对比", expanded=True):
     strategy_options = st.multiselect(
-        "选择要运行的策略（可多选）:",
+        "选择扫描策略（可多选）:",
         ["均线突破", "RSI超卖反弹", "量价背离", "KDJ金叉", "布林带突破", "温和吸筹", "换手锁仓", "妖股基因", "四星共振"],
         default=["均线突破", "RSI超卖反弹", "KDJ金叉"]
     )
     
     st.session_state['selected_strategies'] = strategy_options
     
-    if st.checkbox("启用策略对比模式", value=False):
+    comparison_mode = st.checkbox("启用策略对比模式", value=False)
+    if comparison_mode:
         st.session_state['comparison_mode'] = True
-        st.info("💡 对比模式：将显示不同策略的选股结果对比")
+        st.info("💡 对比模式：显示不同策略效果对比")
     else:
         st.session_state['comparison_mode'] = False
 
 # ==========================================
-# 策略参数面板
+# 策略参数面板  
 # ==========================================
-with st.sidebar.expander("⚙️ 策略参数设置", expanded=False):
+st.sidebar.markdown("### ⚙️ 策略参数设置")
+with st.sidebar.expander("📊 技术指标调整", expanded=False):
     st.markdown("##### 📊 技术指标参数")
     
     # 均线参数
@@ -1612,7 +1641,8 @@ with st.sidebar.expander("⚙️ 策略参数设置", expanded=False):
 # 历史扫描记录
 # ==========================================
 st.sidebar.markdown("---")
-with st.sidebar.expander("📚 历史扫描记录", expanded=False):
+st.sidebar.markdown("### 📚 历史记录")
+with st.sidebar.expander("🕐 扫描历史管理", expanded=False):
     if st.session_state['scan_history']:
         st.markdown("##### 🕐 最近扫描记录")
         
@@ -1668,6 +1698,27 @@ with st.sidebar.expander("📚 历史扫描记录", expanded=False):
             st.rerun()
     else:
         st.info("暂无扫描历史记录")
+
+# 当前配置状态显示
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📊 当前配置状态")
+
+# 显示当前策略配置
+selected_strategies = st.session_state.get('selected_strategies', ["均线突破", "RSI超卖反弹", "KDJ金叉"])
+st.sidebar.info(f"🎯 启用策略: {len(selected_strategies)}个")
+if selected_strategies:
+    st.sidebar.text("• " + "\n• ".join(selected_strategies[:3]))
+    if len(selected_strategies) > 3:
+        st.sidebar.text(f"• ... +{len(selected_strategies)-3}个策略")
+
+# 显示参数状态
+strategy_params = st.session_state.get('strategy_params', {})
+if strategy_params:
+    st.sidebar.text(f"⚙️ 自定义参数: {len(strategy_params)}项")
+
+comparison_mode = st.session_state.get('comparison_mode', False)
+if comparison_mode:
+    st.sidebar.success("🔍 策略对比模式: 已启用")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
