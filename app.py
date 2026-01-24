@@ -133,6 +133,10 @@ try:
     from sklearn.linear_model import LinearRegression
 except ImportError as e:
     st.error(f"❌ 启动失败！缺少必要运行库: {e}")
+    st.error(f"请检查 requirements.txt 文件是否已上传到GitHub")
+    st.stop()
+except Exception as e:
+    st.error(f"❌ 导入错误: {e}")
     st.stop()
 
 # ==========================================
