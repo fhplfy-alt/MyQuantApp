@@ -170,6 +170,7 @@ class QuantsEngine:
                 except:
                     pass
                 
+                time.sleep(0.5)  # 短暂延迟，避免连接过快
                 login_result = bs.login()
                 if login_result.error_code != '0':
                     if attempt < max_retries - 1:
@@ -177,6 +178,7 @@ class QuantsEngine:
                         continue
                     return []
                 
+                time.sleep(0.3)  # 短暂延迟
                 rs = bs.query_all_stock()
                 if rs.error_code != '0':
                     bs.logout()
@@ -198,8 +200,9 @@ class QuantsEngine:
                         data_list.append(row_data)
                     count += 1
                 
+                bs.logout()
+                
                 if not data_list:
-                    bs.logout()
                     if attempt < max_retries - 1:
                         time.sleep(2)
                         continue
@@ -211,8 +214,6 @@ class QuantsEngine:
                         name = data[1] if len(data) > 1 else ""
                         if self.is_valid(code, name):
                             stocks.append(code)
-                
-                bs.logout()
                 
                 if stocks:
                     return stocks[:self.MAX_SCAN_LIMIT]
@@ -244,6 +245,7 @@ class QuantsEngine:
                 except:
                     pass
                 
+                time.sleep(0.5)  # 短暂延迟，避免连接过快
                 login_result = bs.login()
                 if login_result.error_code != '0':
                     if attempt < max_retries - 1:
@@ -251,6 +253,7 @@ class QuantsEngine:
                         continue
                     return []
                 
+                time.sleep(0.3)  # 短暂延迟
                 if index_type == "hs300": 
                     rs = bs.query_hs300_stocks()
                 else: 
@@ -264,12 +267,15 @@ class QuantsEngine:
                     return []
                 
                 stocks = []
-                while rs.next(): 
+                count = 0
+                max_count = 1000  # 防止无限循环
+                while rs.error_code == '0' and rs.next() and count < max_count: 
                     row_data = rs.get_row_data()
                     if row_data and len(row_data) >= 2:
                         code = row_data[1]
                         if code and code.strip():
                             stocks.append(code)
+                    count += 1
                 
                 bs.logout()
                 
@@ -1045,12 +1051,15 @@ else:
             else:
                 stock_list = st.session_state[cache_key]
             
-            if stock_list:
+            if stock_list and len(stock_list) > 0:
                 st.session_state['full_pool'] = stock_list 
                 st.sidebar.success(f"✅ 已加载全量 {len(stock_list)} 只股票")
             else:
                 st.sidebar.error("❌ 获取股票失败，请重试")
                 st.sidebar.info("💡 可能的原因：\n1. 网络连接问题\n2. baostock服务暂时不可用\n3. 请稍后重试或选择其他扫描范围")
+                # 清除缓存，下次重试
+                if cache_key in st.session_state:
+                    del st.session_state[cache_key]
     
     if 'full_pool' in st.session_state:
         full_list = st.session_state['full_pool']
