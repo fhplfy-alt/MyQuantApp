@@ -354,10 +354,20 @@ class QuantsEngine:
         except:
             return None, None, None
 
-    def _process_single_stock(self, code, max_price=None):
+    def _process_single_stock(self, code, max_price=None, strategy_params=None):
+        # 设置默认参数
+        if strategy_params is None:
+            strategy_params = {
+                'ma5_period': 5, 'ma20_period': 20, 'ma200_period': 200,
+                'bb_period': 20, 'rsi_oversold': 30, 'rsi_overbought': 70,
+                'kdj_period': 9, 'vol_ratio_threshold': 1.8,
+                'win_rate_threshold': 70, 'limit_up_count': 3,
+                'turnover_threshold': 5, 'gentle_rise_threshold': 5
+            }
+        
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
+        start = (datetime.datetime.now() - datetime.timedelta(days=200)).strftime("%Y-%m-%d")  # 增加数据长度以支持更长周期均线
         
         data = []
         info = {'name': code, 'industry': '-', 'ipoDate': '2000-01-01'}
@@ -396,15 +406,19 @@ class QuantsEngine:
         except: ipo_date = datetime.datetime(2000, 1, 1)
         days_listed = (datetime.datetime.now() - ipo_date).days
 
-        df['MA5'] = df['close'].rolling(5).mean()
-        df['MA20'] = df['close'].rolling(20).mean()
-        df['MA200'] = df['close'].rolling(200).mean() if len(df) >= 200 else pd.Series([None] * len(df))
+        # 使用动态参数计算均线
+        df['MA5'] = df['close'].rolling(strategy_params['ma5_period']).mean()
+        df['MA20'] = df['close'].rolling(strategy_params['ma20_period']).mean()
+        if len(df) >= strategy_params['ma200_period']:
+            df['MA200'] = df['close'].rolling(strategy_params['ma200_period']).mean()
+        else:
+            df['MA200'] = pd.Series([None] * len(df))
         risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
 
-        # 计算新的技术指标
-        rsi = self.calc_rsi(df)
-        k, d, j = self.calc_kdj(df)
-        bb_upper, bb_mid, bb_lower = self.calc_bollinger(df)
+        # 使用动态参数计算技术指标
+        rsi = self.calc_rsi(df, period=14)  # RSI周期保持14天
+        k, d, j = self.calc_kdj(df, period=strategy_params['kdj_period'])
+        bb_upper, bb_mid, bb_lower = self.calc_bollinger(df, period=strategy_params['bb_period'])
 
         signal_tags = []
         priority = 0
@@ -412,20 +426,20 @@ class QuantsEngine:
 
         is_3_up = all(df['pctChg'].tail(3) > 0)
         sum_3_rise = df['pctChg'].tail(3).sum()
-        if (is_3_up and sum_3_rise <= 5 and winner_rate > 62):
+        if (is_3_up and sum_3_rise <= strategy_params['gentle_rise_threshold'] and winner_rate > 62):
             signal_tags.append("🔴温和吸筹")
             priority = max(priority, 60)
             action = "BUY (低吸)"
 
-        is_high_turn = all(df['turn'].tail(2) > 5) 
-        if is_high_turn and winner_rate > 70:
+        is_high_turn = all(df['turn'].tail(2) > strategy_params['turnover_threshold']) 
+        if is_high_turn and winner_rate > strategy_params['win_rate_threshold']:
             signal_tags.append("🔥换手锁仓")
             priority = max(priority, 70)
             action = "BUY (博弈)"
 
         df_60 = df.tail(60)
         limit_up_60 = len(df_60[df_60['pctChg'] > 9.5])
-        if limit_up_60 >= 3 and winner_rate > 80 and days_listed > 30:
+        if limit_up_60 >= strategy_params['limit_up_count'] and winner_rate > 80 and days_listed > 30:
             signal_tags.append("🐲妖股基因")
             priority = max(priority, 90)
             action = "STRONG BUY"
@@ -440,7 +454,7 @@ class QuantsEngine:
         is_red_15 = (df['close'].tail(15) > df['open'].tail(15)).astype(int)
         has_streak = (is_red_15.rolling(window=4).sum() == 4).any()
         vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
-        is_double_vol = (curr['volume'] > prev['volume'] * 1.8) or (curr['volume'] > vol_ma5 * 1.8)
+        is_double_vol = (curr['volume'] > prev['volume'] * strategy_params['vol_ratio_threshold']) or (curr['volume'] > vol_ma5 * strategy_params['vol_ratio_threshold'])
 
         if has_limit_up_20 and has_gap and has_streak and is_double_vol:
             signal_tags.append("👑四星共振")
@@ -452,9 +466,9 @@ class QuantsEngine:
                  priority = 10
                  signal_tags.append("📈多头")
         
-        # 新增策略：RSI超卖反弹
+        # 新增策略：RSI超卖反弹（使用动态参数）
         if rsi is not None:
-            if rsi < 30 and len(df) >= 2:
+            if rsi < strategy_params['rsi_oversold'] and len(df) >= 2:
                 prev_rsi = self.calc_rsi(df.iloc[:-1])
                 if prev_rsi is not None and prev_rsi < rsi and rsi > 35:
                     signal_tags.append("💎RSI超卖反弹")
@@ -473,7 +487,7 @@ class QuantsEngine:
         # 新增策略：KDJ金叉
         if k is not None and d is not None:
             if len(df) >= 2:
-                prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1])
+                prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1], period=strategy_params['kdj_period'])
                 if prev_k is not None and prev_d is not None:
                     if prev_k <= prev_d and k > d and rsi is not None and rsi > 50:
                         signal_tags.append("🎯KDJ金叉")
@@ -481,12 +495,12 @@ class QuantsEngine:
                         if action in ["WAIT (观望)", "HOLD (持有)"]:
                             action = "BUY (博弈)"
         
-        # 新增策略：200日均线趋势
-        if len(df) >= 200 and not pd.isna(df['MA200'].iloc[-1]):
+        # 新增策略：均线趋势（使用动态参数）
+        if len(df) >= strategy_params['ma200_period'] and not pd.isna(df['MA200'].iloc[-1]):
             ma200_current = df['MA200'].iloc[-1]
-            ma200_prev = df['MA200'].iloc[-2] if len(df) >= 201 else ma200_current
+            ma200_prev = df['MA200'].iloc[-2] if len(df) >= strategy_params['ma200_period'] + 1 else ma200_current
             if curr['close'] > ma200_current and ma200_current > ma200_prev:
-                signal_tags.append("📉200日均线趋势")
+                signal_tags.append("📉长期均线趋势")
                 priority = max(priority, 80)
                 if action in ["WAIT (观望)", "HOLD (持有)", "BUY (低吸)"]:
                     action = "BUY (低吸)" if action == "WAIT (观望)" else action
@@ -509,7 +523,280 @@ class QuantsEngine:
             "option": f"{code} | {info['name']}"
         }
 
-    def scan_market_optimized(self, code_list, max_price=None):
+    def _process_multi_strategy_stock(self, code, max_price=None, selected_strategies=None, strategy_params=None):
+        """多策略处理单只股票"""
+        # 设置默认参数
+        if strategy_params is None:
+            strategy_params = {
+                'ma5_period': 5, 'ma20_period': 20, 'ma200_period': 200,
+                'bb_period': 20, 'rsi_oversold': 30, 'rsi_overbought': 70,
+                'kdj_period': 9, 'vol_ratio_threshold': 1.8,
+                'win_rate_threshold': 70, 'limit_up_count': 3,
+                'turnover_threshold': 5, 'gentle_rise_threshold': 5
+            }
+        
+        if selected_strategies is None:
+            selected_strategies = ["均线突破", "RSI超卖反弹", "KDJ金叉"]
+        
+        code = self.clean_code(code)
+        end = datetime.datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.datetime.now() - datetime.timedelta(days=200)).strftime("%Y-%m-%d")
+        
+        data = []
+        info = {'name': code, 'industry': '-', 'ipoDate': '2000-01-01'}
+        
+        try:
+            rs_info = bs.query_stock_basic(code=code)
+            if rs_info.error_code != '0': return None 
+            if rs_info.next():
+                row = rs_info.get_row_data()
+                info['name'] = row[1]
+                info['ipoDate'] = row[2]
+            rs_ind = bs.query_stock_industry(code)
+            if rs_ind.next():
+                info['industry'] = rs_ind.get_row_data()[3] 
+            if not self.is_valid(code, info['name']): return None
+            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
+            while rs.next(): data.append(rs.get_row_data())
+        except Exception as e:
+            return None
+
+        if not data: return None
+        try:
+            df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"])
+            df = df.apply(pd.to_numeric, errors='coerce')
+        except Exception as e:
+            return None
+        if len(df) < 60: return None
+
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
+        if max_price is not None:
+            if curr['close'] > max_price: return None
+
+        winner_rate = self.calc_winner_rate(df, curr['close'])
+        try: ipo_date = datetime.datetime.strptime(info['ipoDate'], "%Y-%m-%d")
+        except: ipo_date = datetime.datetime(2000, 1, 1)
+        days_listed = (datetime.datetime.now() - ipo_date).days
+
+        # 使用动态参数计算均线
+        df['MA5'] = df['close'].rolling(strategy_params['ma5_period']).mean()
+        df['MA20'] = df['close'].rolling(strategy_params['ma20_period']).mean()
+        if len(df) >= strategy_params['ma200_period']:
+            df['MA200'] = df['close'].rolling(strategy_params['ma200_period']).mean()
+        else:
+            df['MA200'] = pd.Series([None] * len(df))
+        risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
+
+        # 使用动态参数计算技术指标
+        rsi = self.calc_rsi(df, period=14)
+        k, d, j = self.calc_kdj(df, period=strategy_params['kdj_period'])
+        bb_upper, bb_mid, bb_lower = self.calc_bollinger(df, period=strategy_params['bb_period'])
+
+        # 多策略信号检测
+        strategy_results = {}
+        
+        # 1. 均线突破策略
+        if "均线突破" in selected_strategies:
+            ma_signals = []
+            ma_priority = 0
+            ma_action = "WAIT"
+            
+            if prev['open'] < prev['close'] and curr['close'] > prev['close']:
+                ma_signals.append("📈多头")
+                ma_priority = 10
+                ma_action = "HOLD"
+            
+            # MA金叉
+            if (not pd.isna(df['MA5'].iloc[-1]) and not pd.isna(df['MA20'].iloc[-1]) and
+                not pd.isna(df['MA5'].iloc[-2]) and not pd.isna(df['MA20'].iloc[-2])):
+                if df['MA5'].iloc[-2] <= df['MA20'].iloc[-2] and df['MA5'].iloc[-1] > df['MA20'].iloc[-1]:
+                    ma_signals.append("🚀金叉突变")
+                    ma_priority = max(ma_priority, 75)
+                    ma_action = "BUY (博弈)"
+                    
+            strategy_results["均线突破"] = {
+                'signals': ma_signals,
+                'priority': ma_priority,
+                'action': ma_action
+            }
+        
+        # 2. RSI超卖反弹策略
+        if "RSI超卖反弹" in selected_strategies:
+            rsi_signals = []
+            rsi_priority = 0
+            rsi_action = "WAIT"
+            
+            if rsi is not None:
+                if rsi < strategy_params['rsi_oversold'] and len(df) >= 2:
+                    prev_rsi = self.calc_rsi(df.iloc[:-1])
+                    if prev_rsi is not None and prev_rsi < rsi and rsi > 35:
+                        rsi_signals.append("💎RSI超卖反弹")
+                        rsi_priority = 65
+                        rsi_action = "BUY (低吸)"
+                        
+            strategy_results["RSI超卖反弹"] = {
+                'signals': rsi_signals,
+                'priority': rsi_priority,
+                'action': rsi_action
+            }
+        
+        # 3. KDJ金叉策略
+        if "KDJ金叉" in selected_strategies:
+            kdj_signals = []
+            kdj_priority = 0
+            kdj_action = "WAIT"
+            
+            if k is not None and d is not None and len(df) >= 2:
+                prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1], period=strategy_params['kdj_period'])
+                if prev_k is not None and prev_d is not None:
+                    if prev_k <= prev_d and k > d and rsi is not None and rsi > 50:
+                        kdj_signals.append("🎯KDJ金叉")
+                        kdj_priority = 70
+                        kdj_action = "BUY (博弈)"
+                        
+            strategy_results["KDJ金叉"] = {
+                'signals': kdj_signals,
+                'priority': kdj_priority,
+                'action': kdj_action
+            }
+        
+        # 4. 布林带突破策略
+        if "布林带突破" in selected_strategies:
+            bb_signals = []
+            bb_priority = 0
+            bb_action = "WAIT"
+            
+            if bb_upper is not None and bb_lower is not None:
+                if curr['close'] > bb_upper and curr['volume'] > df['volume'].tail(20).mean() * 1.2:
+                    bb_signals.append("📊布林带突破")
+                    bb_priority = 75
+                    bb_action = "BUY (博弈)"
+                    
+            strategy_results["布林带突破"] = {
+                'signals': bb_signals,
+                'priority': bb_priority,
+                'action': bb_action
+            }
+        
+        # 5. 温和吸筹策略
+        if "温和吸筹" in selected_strategies:
+            gentle_signals = []
+            gentle_priority = 0
+            gentle_action = "WAIT"
+            
+            is_3_up = all(df['pctChg'].tail(3) > 0)
+            sum_3_rise = df['pctChg'].tail(3).sum()
+            if (is_3_up and sum_3_rise <= strategy_params['gentle_rise_threshold'] and winner_rate > 62):
+                gentle_signals.append("🔴温和吸筹")
+                gentle_priority = 60
+                gentle_action = "BUY (低吸)"
+                
+            strategy_results["温和吸筹"] = {
+                'signals': gentle_signals,
+                'priority': gentle_priority,
+                'action': gentle_action
+            }
+        
+        # 6. 换手锁仓策略
+        if "换手锁仓" in selected_strategies:
+            turnover_signals = []
+            turnover_priority = 0
+            turnover_action = "WAIT"
+            
+            is_high_turn = all(df['turn'].tail(2) > strategy_params['turnover_threshold'])
+            if is_high_turn and winner_rate > strategy_params['win_rate_threshold']:
+                turnover_signals.append("🔥换手锁仓")
+                turnover_priority = 70
+                turnover_action = "BUY (博弈)"
+                
+            strategy_results["换手锁仓"] = {
+                'signals': turnover_signals,
+                'priority': turnover_priority,
+                'action': turnover_action
+            }
+        
+        # 7. 妖股基因策略
+        if "妖股基因" in selected_strategies:
+            demon_signals = []
+            demon_priority = 0
+            demon_action = "WAIT"
+            
+            df_60 = df.tail(60)
+            limit_up_60 = len(df_60[df_60['pctChg'] > 9.5])
+            if limit_up_60 >= strategy_params['limit_up_count'] and winner_rate > 80 and days_listed > 30:
+                demon_signals.append("🐲妖股基因")
+                demon_priority = 90
+                demon_action = "STRONG BUY"
+                
+            strategy_results["妖股基因"] = {
+                'signals': demon_signals,
+                'priority': demon_priority,
+                'action': demon_action
+            }
+        
+        # 8. 四星共振策略
+        if "四星共振" in selected_strategies:
+            resonance_signals = []
+            resonance_priority = 0
+            resonance_action = "WAIT"
+            
+            recent_20 = df.tail(20)
+            has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
+            has_gap = False
+            recent_10 = df.tail(10).reset_index(drop=True)
+            for i in range(1, len(recent_10)):
+                if recent_10.iloc[i]['low'] > recent_10.iloc[i-1]['high']:
+                    has_gap = True; break
+            is_red_15 = (df['close'].tail(15) > df['open'].tail(15)).astype(int)
+            has_streak = (is_red_15.rolling(window=4).sum() == 4).any()
+            vol_ma5 = df['volume'].tail(6).iloc[:-1].mean()
+            is_double_vol = (curr['volume'] > prev['volume'] * strategy_params['vol_ratio_threshold']) or (curr['volume'] > vol_ma5 * strategy_params['vol_ratio_threshold'])
+
+            if has_limit_up_20 and has_gap and has_streak and is_double_vol:
+                resonance_signals.append("👑四星共振")
+                resonance_priority = 100
+                resonance_action = "STRONG BUY"
+                
+            strategy_results["四星共振"] = {
+                'signals': resonance_signals,
+                'priority': resonance_priority,
+                'action': resonance_action
+            }
+        
+        # 汇总所有策略结果
+        all_signals = []
+        max_priority = 0
+        best_action = "WAIT (观望)"
+        
+        for strategy_name, result in strategy_results.items():
+            if result['signals']:
+                all_signals.extend(result['signals'])
+            if result['priority'] > max_priority:
+                max_priority = result['priority']
+                best_action = result['action']
+        
+        if max_priority == 0:
+            return None
+        
+        return {
+            "result": {
+                "代码": code, "名称": info['name'], 
+                "所属行业": info['industry'],
+                "现价": curr['close'], 
+                "涨跌": f"{curr['pctChg']:.2f}%", 
+                "获利筹码": winner_rate,
+                "风险评级": risk_level,
+                "策略信号": " + ".join(all_signals),
+                "综合评级": best_action,
+                "priority": max_priority
+            },
+            "alert": f"{info['name']}" if max_priority >= 90 else None,
+            "option": f"{code} | {info['name']}",
+            "strategy_breakdown": strategy_results
+        }
+
+    def scan_market_optimized(self, code_list, max_price=None, strategy_params=None):
         """扫描市场 - 保持原来的进度条逻辑"""
         results, alerts, valid_codes_list = [], [], []
         lg = bs.login()
@@ -536,7 +823,7 @@ class QuantsEngine:
                                     text=f"🔍 正在分析: {code} ({current_count}/{total}) | 已命中: {len(results)} 只")
             
             try:
-                res = self._process_single_stock(code, max_price)
+                res = self._process_single_stock(code, max_price, strategy_params)
                 if res:
                     results.append(res["result"])
                     if res["alert"]: alerts.append(res["alert"])
@@ -558,6 +845,88 @@ class QuantsEngine:
             st.success(f"✅ 扫描完成！共找到 {len(results)} 只符合条件的股票")
         else:
             st.info(f"ℹ️ 扫描完成！共扫描 {total} 只股票，未找到符合条件的股票")
+        
+        return results, alerts, valid_codes_list
+
+    def scan_market_multi_strategy(self, code_list, max_price=None, selected_strategies=None, strategy_params=None, comparison_mode=False):
+        """多策略并行扫描市场"""
+        results, alerts, valid_codes_list = [], [], []
+        strategy_stats = {}  # 策略统计
+        
+        lg = bs.login()
+        if lg.error_code != '0':
+            st.error("连接服务器失败，请检查网络！")
+            return [], [], []
+
+        if len(code_list) > self.MAX_SCAN_LIMIT:
+            code_list = code_list[:self.MAX_SCAN_LIMIT]
+            st.info(f"⚠️ 股票数量超过限制，已截取前{self.MAX_SCAN_LIMIT}只")
+
+        total = len(code_list)
+        
+        progress_container = st.empty()
+        progress_bar = progress_container.progress(0, text=f"🚀 正在启动多策略扫描 (共 {total} 只)...")
+        
+        BATCH_SIZE = 20
+        
+        # 初始化策略统计
+        if selected_strategies:
+            for strategy in selected_strategies:
+                strategy_stats[strategy] = {'count': 0, 'stocks': []}
+        
+        for i, code in enumerate(code_list):
+            if i % BATCH_SIZE == 0 or i == total - 1:
+                progress = (i + 1) / total
+                current_count = min(i + 1, total)
+                strategy_summary = " | ".join([f"{s}:{strategy_stats[s]['count']}" for s in strategy_stats.keys()][:3])
+                progress_bar.progress(progress, 
+                                    text=f"🔍 多策略分析: {code} ({current_count}/{total}) | {strategy_summary}")
+            
+            try:
+                res = self._process_multi_strategy_stock(code, max_price, selected_strategies, strategy_params)
+                if res:
+                    results.append(res["result"])
+                    if res["alert"]: alerts.append(res["alert"])
+                    valid_codes_list.append(res["option"])
+                    
+                    # 统计各策略命中情况
+                    if "strategy_breakdown" in res:
+                        for strategy_name, strategy_result in res["strategy_breakdown"].items():
+                            if strategy_result['signals']:
+                                strategy_stats[strategy_name]['count'] += 1
+                                strategy_stats[strategy_name]['stocks'].append({
+                                    'code': res["result"]["代码"],
+                                    'name': res["result"]["名称"],
+                                    'signals': strategy_result['signals'],
+                                    'priority': strategy_result['priority'],
+                                    'action': strategy_result['action']
+                                })
+                    
+            except Exception as e:
+                try:
+                    bs.logout()
+                    time.sleep(0.5)
+                    bs.login()
+                except:
+                    pass
+                continue
+
+        bs.logout()
+        progress_container.empty()
+        
+        # 保存策略统计到session_state
+        st.session_state['strategy_stats'] = strategy_stats
+        
+        # 显示扫描完成提示和策略统计
+        if len(results) > 0:
+            st.success(f"✅ 多策略扫描完成！共找到 {len(results)} 只符合条件的股票")
+            
+            # 显示策略统计
+            stats_text = " | ".join([f"{strategy}: {stats['count']}只" for strategy, stats in strategy_stats.items() if stats['count'] > 0])
+            if stats_text:
+                st.info(f"📊 策略命中统计：{stats_text}")
+        else:
+            st.info(f"ℹ️ 多策略扫描完成！共扫描 {total} 只股票，未找到符合条件的股票")
         
         return results, alerts, valid_codes_list
 
@@ -786,6 +1155,154 @@ class QuantsEngine:
         except Exception:
             return df
 
+    def run_backtest(self, df, strategy_params=None):
+        """运行单标的回测"""
+        if df is None or len(df) < 30:
+            return None
+        
+        # 设置默认参数
+        if strategy_params is None:
+            strategy_params = {
+                'ma5_period': 5, 'ma20_period': 20, 'ma200_period': 200,
+                'bb_period': 20, 'rsi_oversold': 30, 'rsi_overbought': 70,
+                'kdj_period': 9, 'vol_ratio_threshold': 1.8,
+                'win_rate_threshold': 70, 'limit_up_count': 3,
+                'turnover_threshold': 5, 'gentle_rise_threshold': 5
+            }
+        
+        try:
+            # 计算技术指标
+            df_backtest = self.calc_indicators(df.copy())
+            
+            # 生成交易信号
+            df_backtest['buy_signal'] = 0
+            df_backtest['sell_signal'] = 0
+            df_backtest['position'] = 0  # 持仓状态：0=空仓，1=持仓
+            df_backtest['returns'] = 0.0  # 每日收益率
+            df_backtest['cumulative_returns'] = 1.0  # 累积收益率
+            
+            # 计算信号
+            for i in range(max(strategy_params['ma20_period'], strategy_params['kdj_period']), len(df_backtest)):
+                current_row = df_backtest.iloc[i]
+                prev_row = df_backtest.iloc[i-1] if i > 0 else current_row
+                
+                # MA金叉买入信号
+                if (current_row['MA5'] > current_row['MA20'] and 
+                    prev_row['MA5'] <= prev_row['MA20'] and 
+                    not pd.isna(current_row['MA5']) and not pd.isna(current_row['MA20'])):
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('buy_signal')] = 1
+                
+                # MA死叉卖出信号
+                if (current_row['MA5'] < current_row['MA20'] and 
+                    prev_row['MA5'] >= prev_row['MA20'] and 
+                    not pd.isna(current_row['MA5']) and not pd.isna(current_row['MA20'])):
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('sell_signal')] = 1
+                
+                # RSI超卖买入信号
+                if ('RSI' in df_backtest.columns and not pd.isna(current_row['RSI']) and 
+                    current_row['RSI'] < strategy_params['rsi_oversold'] and 
+                    i > 0 and not pd.isna(df_backtest.iloc[i-1]['RSI']) and
+                    df_backtest.iloc[i-1]['RSI'] < current_row['RSI']):
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('buy_signal')] = 1
+                
+                # KDJ金叉买入信号
+                if ('K' in df_backtest.columns and 'D' in df_backtest.columns and 
+                    not pd.isna(current_row['K']) and not pd.isna(current_row['D']) and
+                    current_row['K'] > current_row['D'] and 
+                    i > 0 and not pd.isna(df_backtest.iloc[i-1]['K']) and not pd.isna(df_backtest.iloc[i-1]['D']) and
+                    df_backtest.iloc[i-1]['K'] <= df_backtest.iloc[i-1]['D']):
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('buy_signal')] = 1
+            
+            # 执行交易逻辑
+            position = 0
+            buy_price = 0
+            trades = []
+            
+            for i in range(len(df_backtest)):
+                current_price = df_backtest.iloc[i]['close']
+                
+                # 买入逻辑
+                if df_backtest.iloc[i]['buy_signal'] == 1 and position == 0:
+                    position = 1
+                    buy_price = current_price
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('position')] = 1
+                    trades.append({'type': 'buy', 'price': buy_price, 'date': df_backtest.iloc[i]['date']})
+                
+                # 卖出逻辑
+                elif df_backtest.iloc[i]['sell_signal'] == 1 and position == 1:
+                    position = 0
+                    sell_price = current_price
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('position')] = 0
+                    trade_return = (sell_price - buy_price) / buy_price
+                    trades.append({
+                        'type': 'sell', 
+                        'price': sell_price, 
+                        'date': df_backtest.iloc[i]['date'],
+                        'return': trade_return
+                    })
+                else:
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('position')] = position
+                
+                # 计算每日收益率
+                if position == 1:
+                    if i > 0:
+                        daily_return = (current_price - df_backtest.iloc[i-1]['close']) / df_backtest.iloc[i-1]['close']
+                        df_backtest.iloc[i, df_backtest.columns.get_loc('returns')] = daily_return
+                
+                # 计算累积收益率
+                if i == 0:
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('cumulative_returns')] = 1.0
+                else:
+                    df_backtest.iloc[i, df_backtest.columns.get_loc('cumulative_returns')] = (
+                        df_backtest.iloc[i-1]['cumulative_returns'] * (1 + df_backtest.iloc[i]['returns'])
+                    )
+            
+            # 计算回测统计指标
+            complete_trades = [t for t in trades if t['type'] == 'sell']
+            
+            if len(complete_trades) == 0:
+                return {
+                    'total_trades': 0,
+                    'win_rate': 0,
+                    'total_return': 0,
+                    'max_drawdown': 0,
+                    'sharpe_ratio': 0,
+                    'trades': trades,
+                    'df_backtest': df_backtest
+                }
+            
+            # 总收益率
+            total_return = (df_backtest['cumulative_returns'].iloc[-1] - 1) * 100
+            
+            # 胜率
+            winning_trades = [t for t in complete_trades if t['return'] > 0]
+            win_rate = len(winning_trades) / len(complete_trades) * 100 if complete_trades else 0
+            
+            # 最大回撤
+            peak = df_backtest['cumulative_returns'].expanding().max()
+            drawdown = (df_backtest['cumulative_returns'] - peak) / peak
+            max_drawdown = abs(drawdown.min()) * 100
+            
+            # 夏普比率（简化版）
+            returns_series = df_backtest['returns'][df_backtest['returns'] != 0]
+            if len(returns_series) > 1:
+                sharpe_ratio = returns_series.mean() / returns_series.std() * np.sqrt(252) if returns_series.std() != 0 else 0
+            else:
+                sharpe_ratio = 0
+            
+            return {
+                'total_trades': len(complete_trades),
+                'win_rate': win_rate,
+                'total_return': total_return,
+                'max_drawdown': max_drawdown,
+                'sharpe_ratio': sharpe_ratio,
+                'avg_return_per_trade': np.mean([t['return'] * 100 for t in complete_trades]) if complete_trades else 0,
+                'trades': trades,
+                'df_backtest': df_backtest
+            }
+        except Exception as e:
+            return None
+
     def plot_professional_kline(self, df, title):
         """绘制K线图 - 增加异常处理"""
         if df is None or df.empty or len(df) < 10:
@@ -971,6 +1488,8 @@ if 'alerts' not in st.session_state:
     st.session_state['alerts'] = []
 if 'analyzing' not in st.session_state:
     st.session_state['analyzing'] = False
+if 'scan_history' not in st.session_state:
+    st.session_state['scan_history'] = []
 
 st.sidebar.header("🕹️ 控制台")
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
@@ -1015,16 +1534,202 @@ else:
     else:
         final_code_list = []
 
+# ==========================================
+# 多策略选择面板
+# ==========================================
+st.sidebar.markdown("---")
+with st.sidebar.expander("🔀 多策略配置", expanded=False):
+    st.markdown("##### 🎯 选择扫描策略")
+    
+    strategy_options = st.multiselect(
+        "选择要运行的策略（可多选）:",
+        ["均线突破", "RSI超卖反弹", "量价背离", "KDJ金叉", "布林带突破", "温和吸筹", "换手锁仓", "妖股基因", "四星共振"],
+        default=["均线突破", "RSI超卖反弹", "KDJ金叉"]
+    )
+    
+    st.session_state['selected_strategies'] = strategy_options
+    
+    if st.checkbox("启用策略对比模式", value=False):
+        st.session_state['comparison_mode'] = True
+        st.info("💡 对比模式：将显示不同策略的选股结果对比")
+    else:
+        st.session_state['comparison_mode'] = False
+
+# ==========================================
+# 策略参数面板
+# ==========================================
+with st.sidebar.expander("⚙️ 策略参数设置", expanded=False):
+    st.markdown("##### 📊 技术指标参数")
+    
+    # 均线参数
+    col1, col2 = st.columns(2)
+    with col1:
+        ma5_period = st.number_input("MA5周期", min_value=3, max_value=10, value=5)
+        ma20_period = st.number_input("MA20周期", min_value=10, max_value=30, value=20)
+    with col2:
+        ma200_period = st.number_input("MA200周期", min_value=100, max_value=300, value=200)
+        bb_period = st.number_input("布林带周期", min_value=10, max_value=30, value=20)
+    
+    st.markdown("##### 🎯 信号阈值参数")
+    col3, col4 = st.columns(2)
+    with col3:
+        rsi_oversold = st.number_input("RSI超卖阈值", min_value=20, max_value=40, value=30)
+        rsi_overbought = st.number_input("RSI超买阈值", min_value=60, max_value=80, value=70)
+    with col4:
+        kdj_period = st.number_input("KDJ周期", min_value=7, max_value=14, value=9)
+        vol_ratio_threshold = st.number_input("成交量放大倍数", min_value=1.2, max_value=3.0, value=1.8, step=0.1)
+    
+    st.markdown("##### 🔥 策略参数")
+    col5, col6 = st.columns(2)
+    with col5:
+        win_rate_threshold = st.number_input("获利筹码阈值(%)", min_value=50, max_value=90, value=70)
+        limit_up_count = st.number_input("妖股基因涨停次数", min_value=2, max_value=5, value=3)
+    with col6:
+        turnover_threshold = st.number_input("换手率阈值(%)", min_value=3, max_value=10, value=5)
+        gentle_rise_threshold = st.number_input("温和上涨阈值(%)", min_value=3, max_value=8, value=5)
+    
+    # 保存参数到session_state
+    strategy_params = {
+        'ma5_period': ma5_period,
+        'ma20_period': ma20_period,
+        'ma200_period': ma200_period,
+        'bb_period': bb_period,
+        'rsi_oversold': rsi_oversold,
+        'rsi_overbought': rsi_overbought,
+        'kdj_period': kdj_period,
+        'vol_ratio_threshold': vol_ratio_threshold,
+        'win_rate_threshold': win_rate_threshold,
+        'limit_up_count': limit_up_count,
+        'turnover_threshold': turnover_threshold,
+        'gentle_rise_threshold': gentle_rise_threshold
+    }
+    st.session_state['strategy_params'] = strategy_params
+    
+    if st.button("🔄 重置为默认参数"):
+        st.rerun()
+
+# ==========================================
+# 历史扫描记录
+# ==========================================
+st.sidebar.markdown("---")
+with st.sidebar.expander("📚 历史扫描记录", expanded=False):
+    if st.session_state['scan_history']:
+        st.markdown("##### 🕐 最近扫描记录")
+        
+        for i, record in enumerate(st.session_state['scan_history']):
+            with st.container():
+                st.markdown(f"**#{i+1} {record['timestamp']}**")
+                st.write(f"🎯 {record['scan_type']} | 📊 {record['result_count']}/{record['stock_count']} 只")
+                st.write(f"💰 ≤¥{record['max_price']} | 🚨 {record['alerts_count']} 个强信号")
+                
+                col_hist1, col_hist2 = st.columns(2)
+                
+                with col_hist1:
+                    if st.button(f"📋 加载", key=f"load_{i}"):
+                        # 加载历史记录
+                        st.session_state['scan_res'] = record['results']
+                        st.session_state['alerts'] = []  # 重置alerts
+                        
+                        # 重新生成valid_options
+                        valid_options = []
+                        for result in record['results']:
+                            valid_options.append(f"{result['代码']} | {result['名称']}")
+                        st.session_state['valid_options'] = valid_options
+                        
+                        st.success(f"✅ 已加载 {record['timestamp']} 的扫描记录")
+                        st.rerun()
+                
+                with col_hist2:
+                    if st.button(f"📤 导出", key=f"export_{i}"):
+                        # 导出历史记录
+                        export_df = pd.DataFrame(record['results'])
+                        csv = export_df.to_csv(index=False, encoding='utf-8-sig')
+                        st.download_button(
+                            label="下载CSV",
+                            data=csv,
+                            file_name=f"历史扫描_{record['timestamp'].replace(':', '-').replace(' ', '_')}.csv",
+                            mime="text/csv",
+                            key=f"download_{i}"
+                        )
+                
+                # 显示策略信息
+                if record.get('strategies'):
+                    strategies_text = " | ".join(record['strategies'][:3])
+                    if len(record['strategies']) > 3:
+                        strategies_text += f" +{len(record['strategies'])-3}个"
+                    st.caption(f"策略: {strategies_text}")
+                
+                st.markdown("---")
+        
+        # 清空历史记录
+        if st.button("🗑️ 清空历史记录"):
+            st.session_state['scan_history'] = []
+            st.success("✅ 历史记录已清空")
+            st.rerun()
+    else:
+        st.info("暂无扫描历史记录")
+
 st.sidebar.markdown("---")
 if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
     if not final_code_list:
         st.sidebar.error("请先加载股票！")
     else:
+        # 获取策略参数
+        strategy_params = st.session_state.get('strategy_params', {
+            'ma5_period': 5, 'ma20_period': 20, 'ma200_period': 200,
+            'bb_period': 20, 'rsi_oversold': 30, 'rsi_overbought': 70,
+            'kdj_period': 9, 'vol_ratio_threshold': 1.8,
+            'win_rate_threshold': 70, 'limit_up_count': 3,
+            'turnover_threshold': 5, 'gentle_rise_threshold': 5
+        })
+        
+        # 获取选中的策略
+        selected_strategies = st.session_state.get('selected_strategies', ["均线突破", "RSI超卖反弹", "KDJ金叉"])
+        comparison_mode = st.session_state.get('comparison_mode', False)
+        
         st.caption(f"当前筛选：价格 < {max_price_limit}元 | 剔除ST/科创/北交 | 模式：长连接稳定扫描")
-        scan_res, alerts, valid_options = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
+        st.info(f"🔧 使用参数：MA{strategy_params['ma5_period']}/{strategy_params['ma20_period']}/{strategy_params['ma200_period']} | RSI{strategy_params['rsi_oversold']} | KDJ{strategy_params['kdj_period']} | 量比{strategy_params['vol_ratio_threshold']}")
+        st.info(f"🎯 启用策略：{' | '.join(selected_strategies)} {'(对比模式)' if comparison_mode else ''}")
+        
+        # 根据是否启用多策略模式选择扫描方法
+        if len(selected_strategies) > 1 or comparison_mode:
+            scan_res, alerts, valid_options = engine.scan_market_multi_strategy(
+                final_code_list, 
+                max_price=max_price_limit, 
+                selected_strategies=selected_strategies,
+                strategy_params=strategy_params,
+                comparison_mode=comparison_mode
+            )
+        else:
+            scan_res, alerts, valid_options = engine.scan_market_optimized(
+                final_code_list, 
+                max_price=max_price_limit, 
+                strategy_params=strategy_params
+            )
+        
         st.session_state['scan_res'] = scan_res
         st.session_state['valid_options'] = valid_options
         st.session_state['alerts'] = alerts
+        st.session_state['comparison_mode_active'] = comparison_mode
+        
+        # 保存扫描历史记录
+        scan_record = {
+            'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'scan_type': pool_mode,
+            'stock_count': len(final_code_list),
+            'result_count': len(scan_res),
+            'max_price': max_price_limit,
+            'strategies': selected_strategies,
+            'strategy_params': strategy_params.copy(),
+            'results': scan_res.copy(),
+            'alerts_count': len(alerts),
+            'comparison_mode': comparison_mode
+        }
+        
+        # 保持最近10条记录
+        st.session_state['scan_history'].insert(0, scan_record)
+        if len(st.session_state['scan_history']) > 10:
+            st.session_state['scan_history'] = st.session_state['scan_history'][:10]
 
 with st.expander("📖 **策略逻辑白皮书**", expanded=False):
     st.markdown("##### 🔍 核心策略定义")
@@ -1080,6 +1785,125 @@ if 'scan_res' in st.session_state:
                 "priority": None
             }
         )
+        
+        # 导出功能
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
+        with col1:
+            # 导出CSV
+            export_df = df_scan.drop('priority', axis=1, errors='ignore')
+            csv = export_df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label="📄 导出CSV",
+                data=csv,
+                file_name=f"选股结果_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                help="导出扫描结果为CSV格式"
+            )
+        
+        with col2:
+            # 导出Excel
+            try:
+                import io
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    export_df.to_excel(writer, sheet_name='选股结果', index=False)
+                    
+                    # 获取工作表以进行格式化
+                    workbook = writer.book
+                    worksheet = writer.sheets['选股结果']
+                    
+                    # 设置列宽
+                    worksheet.set_column('A:A', 10)  # 代码
+                    worksheet.set_column('B:B', 12)  # 名称
+                    worksheet.set_column('C:C', 15)  # 所属行业
+                    worksheet.set_column('D:D', 10)  # 现价
+                    worksheet.set_column('E:E', 10)  # 涨跌
+                    worksheet.set_column('F:F', 12)  # 获利筹码
+                    worksheet.set_column('G:G', 12)  # 风险评级
+                    worksheet.set_column('H:H', 25)  # 策略信号
+                    worksheet.set_column('I:I', 15)  # 综合评级
+                
+                excel_data = buffer.getvalue()
+                st.download_button(
+                    label="📊 导出Excel",
+                    data=excel_data,
+                    file_name=f"选股结果_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="导出扫描结果为Excel格式"
+                )
+            except ImportError:
+                st.error("❌ 需要安装 xlsxwriter 库才能导出Excel")
+        
+        with col3:
+            st.info(f"📊 当前结果：{len(df_scan)} 只股票 | 📅 扫描时间：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 策略对比分析
+        if st.session_state.get('comparison_mode_active', False) and 'strategy_stats' in st.session_state:
+            st.markdown("---")
+            st.markdown("### 🔍 策略对比分析")
+            
+            strategy_stats = st.session_state['strategy_stats']
+            
+            # 策略效果对比
+            col_compare1, col_compare2 = st.columns(2)
+            
+            with col_compare1:
+                st.markdown("##### 📊 策略命中统计")
+                strategy_comparison_data = []
+                for strategy, stats in strategy_stats.items():
+                    if stats['count'] > 0:
+                        strategy_comparison_data.append({
+                            '策略名称': strategy,
+                            '命中股票数': stats['count'],
+                            '命中率': f"{(stats['count'] / len(df_scan) * 100):.1f}%" if len(df_scan) > 0 else "0%"
+                        })
+                
+                if strategy_comparison_data:
+                    st.dataframe(pd.DataFrame(strategy_comparison_data), use_container_width=True)
+            
+            with col_compare2:
+                st.markdown("##### 🏆 策略排行")
+                if strategy_comparison_data:
+                    sorted_strategies = sorted(strategy_comparison_data, key=lambda x: x['命中股票数'], reverse=True)
+                    for i, strategy in enumerate(sorted_strategies[:5]):
+                        medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i]
+                        st.write(f"{medal} **{strategy['策略名称']}**: {strategy['命中股票数']}只 ({strategy['命中率']})")
+            
+            # 策略重叠分析
+            with st.expander("🔄 策略重叠分析", expanded=False):
+                st.markdown("##### 多策略命中的股票")
+                multi_strategy_stocks = {}
+                
+                # 统计每只股票被多少个策略命中
+                for result in results:
+                    code = result['代码']
+                    name = result['名称']
+                    signals = result['策略信号'].split(' + ')
+                    strategy_count = len([s for s in signals if s.strip()])
+                    
+                    if strategy_count > 1:
+                        multi_strategy_stocks[f"{code} {name}"] = {
+                            'count': strategy_count,
+                            'signals': result['策略信号'],
+                            'action': result['综合评级']
+                        }
+                
+                if multi_strategy_stocks:
+                    multi_df_data = []
+                    for stock, info in multi_strategy_stocks.items():
+                        multi_df_data.append({
+                            '股票': stock,
+                            '策略数量': info['count'],
+                            '命中策略': info['signals'],
+                            '综合评级': info['action']
+                        })
+                    
+                    multi_df = pd.DataFrame(multi_df_data).sort_values('策略数量', ascending=False)
+                    st.dataframe(multi_df, use_container_width=True)
+                else:
+                    st.info("暂无多策略重叠的股票")
 else:
     st.info("👈 请在左侧加载股票 -> 点击'启动全策略扫描'")
 
@@ -1163,6 +1987,96 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
                         """)
                     else:
                         st.warning("⚠️ 无法生成K线图，数据可能不足")
+                    
+                    # 回测功能
+                    st.markdown("### 📈 策略回测分析")
+                    
+                    # 获取策略参数
+                    strategy_params = st.session_state.get('strategy_params', {
+                        'ma5_period': 5, 'ma20_period': 20, 'ma200_period': 200,
+                        'bb_period': 20, 'rsi_oversold': 30, 'rsi_overbought': 70,
+                        'kdj_period': 9, 'vol_ratio_threshold': 1.8,
+                        'win_rate_threshold': 70, 'limit_up_count': 3,
+                        'turnover_threshold': 5, 'gentle_rise_threshold': 5
+                    })
+                    
+                    # 运行回测
+                    backtest_result = engine.run_backtest(df, strategy_params)
+                    
+                    if backtest_result:
+                        # 显示回测结果
+                        bt_col1, bt_col2, bt_col3, bt_col4 = st.columns(4)
+                        
+                        with bt_col1:
+                            st.metric(
+                                "总收益率", 
+                                f"{backtest_result['total_return']:.2f}%",
+                                delta=f"vs持有: {((df.iloc[-1]['close']/df.iloc[0]['close']-1)*100 - backtest_result['total_return']):.2f}%"
+                            )
+                        
+                        with bt_col2:
+                            color = "normal" if backtest_result['win_rate'] >= 50 else "inverse"
+                            st.metric("胜率", f"{backtest_result['win_rate']:.1f}%")
+                        
+                        with bt_col3:
+                            st.metric("最大回撤", f"-{backtest_result['max_drawdown']:.2f}%")
+                        
+                        with bt_col4:
+                            st.metric("总交易次数", backtest_result['total_trades'])
+                        
+                        # 回测详情
+                        with st.expander("📊 详细回测数据", expanded=False):
+                            bt_col5, bt_col6 = st.columns(2)
+                            
+                            with bt_col5:
+                                st.metric("夏普比率", f"{backtest_result['sharpe_ratio']:.3f}")
+                                st.metric("平均单次收益", f"{backtest_result['avg_return_per_trade']:.2f}%")
+                                
+                            with bt_col6:
+                                buy_and_hold_return = (df.iloc[-1]['close']/df.iloc[0]['close']-1)*100
+                                st.metric("买入持有收益", f"{buy_and_hold_return:.2f}%")
+                                
+                                alpha = backtest_result['total_return'] - buy_and_hold_return
+                                st.metric("策略Alpha", f"{alpha:.2f}%")
+                            
+                            # 显示交易记录
+                            if backtest_result['trades']:
+                                st.markdown("##### 🔄 交易记录")
+                                trades_data = []
+                                for i, trade in enumerate(backtest_result['trades']):
+                                    if trade['type'] == 'sell':
+                                        # 找到对应的买入记录
+                                        buy_trade = None
+                                        for j in range(i-1, -1, -1):
+                                            if backtest_result['trades'][j]['type'] == 'buy':
+                                                buy_trade = backtest_result['trades'][j]
+                                                break
+                                        
+                                        if buy_trade:
+                                            trades_data.append({
+                                                '买入日期': buy_trade['date'],
+                                                '买入价格': f"¥{buy_trade['price']:.2f}",
+                                                '卖出日期': trade['date'],
+                                                '卖出价格': f"¥{trade['price']:.2f}",
+                                                '收益率': f"{trade['return']*100:.2f}%"
+                                            })
+                                
+                                if trades_data:
+                                    st.dataframe(pd.DataFrame(trades_data), use_container_width=True)
+                            
+                        # 策略vs买入持有对比
+                        if backtest_result['total_trades'] > 0:
+                            buy_hold = (df.iloc[-1]['close'] / df.iloc[0]['close'] - 1) * 100
+                            strategy_return = backtest_result['total_return']
+                            
+                            if strategy_return > buy_hold:
+                                st.success(f"✅ 策略表现优于买入持有 {strategy_return - buy_hold:.2f}%")
+                            else:
+                                st.warning(f"⚠️ 策略表现低于买入持有 {abs(strategy_return - buy_hold):.2f}%")
+                        else:
+                            st.info("ℹ️ 在回测期间内未产生交易信号")
+                    else:
+                        st.error("❌ 回测计算失败，数据可能不足")
                         
                     # 显示最近数据
                     with st.expander("📋 查看最近交易数据"):
@@ -1181,31 +2095,62 @@ if 'valid_options' in st.session_state and st.session_state['valid_options']:
 
 # 添加系统状态信息
 with st.expander("📊 系统状态", expanded=False):
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
+        st.markdown("##### 📈 数据状态")
         if 'full_pool' in st.session_state:
             st.metric("股票池总量", f"{len(st.session_state['full_pool']):,}")
         else:
             st.metric("股票池总量", "0")
-    
-    with col2:
+        
         if 'scan_res' in st.session_state:
             st.metric("当前结果数", f"{len(st.session_state['scan_res']):,}")
         else:
             st.metric("当前结果数", "0")
     
-    if 'valid_options' in st.session_state:
-        st.write(f"可选分析股票: {len(st.session_state['valid_options'])} 只")
+    with col2:
+        st.markdown("##### 🎯 策略状态")
+        selected_strategies = st.session_state.get('selected_strategies', [])
+        st.write(f"启用策略数: {len(selected_strategies)}")
+        if selected_strategies:
+            st.write(f"策略列表: {', '.join(selected_strategies[:2])}{'...' if len(selected_strategies) > 2 else ''}")
+        
+        comparison_mode = st.session_state.get('comparison_mode', False)
+        st.write(f"对比模式: {'✅ 启用' if comparison_mode else '❌ 关闭'}")
     
-    st.write(f"最大扫描限制: {engine.MAX_SCAN_LIMIT:,} 只")
-    st.write(f"当前时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    with col3:
+        st.markdown("##### 📚 历史记录")
+        scan_history = st.session_state.get('scan_history', [])
+        st.metric("历史记录数", len(scan_history))
+        
+        if scan_history:
+            latest = scan_history[0]['timestamp']
+            st.write(f"最近扫描: {latest}")
+    
+    st.markdown("---")
+    col_sys1, col_sys2 = st.columns(2)
+    
+    with col_sys1:
+        if 'valid_options' in st.session_state:
+            st.write(f"📊 可分析股票: {len(st.session_state['valid_options'])} 只")
+        st.write(f"⚡ 最大扫描限制: {engine.MAX_SCAN_LIMIT:,} 只")
+    
+    with col_sys2:
+        st.write(f"🕐 当前时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        strategy_params = st.session_state.get('strategy_params', {})
+        if strategy_params:
+            st.write(f"🔧 参数状态: 已自定义 ({len(strategy_params)} 项)")
 
 # 添加使用提示
 st.caption("""
-💡 **使用提示**: 
-1. 扫描大量股票时请耐心等待，进度条会正常显示扫描进度
-2. 点击"分析"按钮时，系统会安全获取数据，避免白屏
-3. 如果某只股票分析失败，请尝试选择其他股票
-4. 投资有风险，决策需谨慎
+💡 **V45 新功能使用指南**: 
+1. **⚙️ 策略参数设置**: 调整均线周期、RSI阈值等技术指标参数，个性化您的选股策略
+2. **🔀 多策略配置**: 选择多个策略并行运行，启用对比模式查看不同策略效果
+3. **📈 策略回测**: 在深度分析中查看历史回测结果，包含收益率、胜率、最大回撤等关键指标
+4. **📤 结果导出**: 将扫描结果导出为Excel/CSV格式，支持进一步分析
+5. **📚 历史记录**: 查看和加载历史扫描记录，对比不同时期的选股结果
+6. **🔍 策略对比**: 在对比模式下查看各策略命中统计和重叠分析
+7. 投资有风险，所有分析结果仅供参考，请谨慎决策
 
 """)
