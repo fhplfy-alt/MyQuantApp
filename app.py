@@ -155,41 +155,146 @@ class QuantsEngine:
 
     def get_all_stocks(self):
         """获取全市场股票，最多6000只"""
-        try:
-            bs.login()
-            rs = bs.query_all_stock()
-            stocks = []
-            data_list = []
-            while (rs.error_code == '0') & rs.next():
-                data_list.append(rs.get_row_data())
-            
-            for data in data_list:
-                if len(data) >= 2:
-                    code = data[0]
-                    name = data[1] if len(data) > 1 else ""
-                    if self.is_valid(code, name):
-                        stocks.append(code)
-            
-            bs.logout()
-            return stocks[:self.MAX_SCAN_LIMIT]
-        except Exception as e:
+        max_retries = 3
+        last_error = None
+        
+        for attempt in range(max_retries):
             try:
+                # 先尝试登出（如果之前有登录）
+                try:
+                    bs.logout()
+                except:
+                    pass
+                
+                # 尝试登录
+                login_result = bs.login()
+                if login_result.error_code != '0':
+                    last_error = f"登录失败: {login_result.error_msg if hasattr(login_result, 'error_msg') else '未知错误'}"
+                    if attempt < max_retries - 1:
+                        time.sleep(2)  # 等待2秒后重试
+                        continue
+                    return []
+                
+                # 查询所有股票
+                rs = bs.query_all_stock()
+                if rs.error_code != '0':
+                    last_error = f"查询失败: {rs.error_msg if hasattr(rs, 'error_msg') else '未知错误'}"
+                    bs.logout()
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return []
+                
+                stocks = []
+                data_list = []
+                count = 0
+                max_count = 10000  # 防止无限循环
+                
+                # 修复：使用 and 而不是 &，并正确处理 rs.next() 的返回值
+                while rs.error_code == '0' and count < max_count:
+                    if not rs.next():
+                        break
+                    row_data = rs.get_row_data()
+                    if row_data and len(row_data) >= 2:
+                        data_list.append(row_data)
+                    count += 1
+                
+                if not data_list:
+                    last_error = "未获取到任何股票数据"
+                    bs.logout()
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return []
+                
+                for data in data_list:
+                    if len(data) >= 2:
+                        code = data[0]
+                        name = data[1] if len(data) > 1 else ""
+                        if self.is_valid(code, name):
+                            stocks.append(code)
+                
                 bs.logout()
-            except:
-                pass
-            return []
+                
+                if stocks:
+                    return stocks[:self.MAX_SCAN_LIMIT]
+                else:
+                    last_error = "过滤后没有有效股票"
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return []
+                    
+            except Exception as e:
+                last_error = f"异常错误: {str(e)}"
+                try:
+                    bs.logout()
+                except:
+                    pass
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return []
+        
+        return []
 
     def get_index_stocks(self, index_type="zz500"):
-        bs.login()
-        stocks = []
-        try:
-            if index_type == "hs300": rs = bs.query_hs300_stocks()
-            else: rs = bs.query_zz500_stocks()
-            while rs.next(): stocks.append(rs.get_row_data()[1])
-        except Exception as e:
-            pass
-        finally: bs.logout()
-        return stocks[:self.MAX_SCAN_LIMIT]
+        """获取指数成分股"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # 尝试登录
+                login_result = bs.login()
+                if login_result.error_code != '0':
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return []
+                
+                stocks = []
+                try:
+                    if index_type == "hs300": 
+                        rs = bs.query_hs300_stocks()
+                    else: 
+                        rs = bs.query_zz500_stocks()
+                    
+                    if rs.error_code != '0':
+                        bs.logout()
+                        if attempt < max_retries - 1:
+                            time.sleep(1)
+                            continue
+                        return []
+                    
+                    while rs.next(): 
+                        stocks.append(rs.get_row_data()[1])
+                except Exception as e:
+                    bs.logout()
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return []
+                finally: 
+                    bs.logout()
+                
+                if stocks:
+                    return stocks[:self.MAX_SCAN_LIMIT]
+                else:
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return []
+                    
+            except Exception as e:
+                try:
+                    bs.logout()
+                except:
+                    pass
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return []
+        
+        return []
 
     def calc_winner_rate(self, df, current_price):
         if df.empty: return 0.0
@@ -891,9 +996,10 @@ else:
             
             if stock_list:
                 st.session_state['full_pool'] = stock_list 
-                st.sidebar.success(f"已加载全量 {len(stock_list)} 只股票")
+                st.sidebar.success(f"✅ 已加载全量 {len(stock_list)} 只股票")
             else:
-                st.sidebar.error("获取股票失败，请重试")
+                st.sidebar.error("❌ 获取股票失败，请重试")
+                st.sidebar.info("💡 可能的原因：\n1. 网络连接问题\n2. baostock服务暂时不可用\n3. 请稍后重试或选择其他扫描范围")
     
     if 'full_pool' in st.session_state:
         full_list = st.session_state['full_pool']
