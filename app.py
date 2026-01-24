@@ -297,6 +297,20 @@ class QuantsEngine:
                 
                 stocks = []
                 try:
+                    # 先尝试登出（如果之前有登录）
+                    try:
+                        bs.logout()
+                    except:
+                        pass
+                    
+                    # 尝试登录
+                    login_result = bs.login()
+                    if login_result.error_code != '0':
+                        if attempt < max_retries - 1:
+                            time.sleep(2)
+                            continue
+                        return []
+                    
                     if index_type == "hs300": 
                         rs = bs.query_hs300_stocks()
                     else: 
@@ -305,20 +319,31 @@ class QuantsEngine:
                     if rs.error_code != '0':
                         bs.logout()
                         if attempt < max_retries - 1:
-                            time.sleep(1)
+                            time.sleep(2)
                             continue
                         return []
                     
+                    # 安全获取数据
                     while rs.next(): 
-                        stocks.append(rs.get_row_data()[1])
+                        row_data = rs.get_row_data()
+                        if row_data and len(row_data) >= 2:
+                            code = row_data[1]  # 股票代码在第二个位置
+                            if code and code.strip():
+                                stocks.append(code)
                 except Exception as e:
-                    bs.logout()
+                    try:
+                        bs.logout()
+                    except:
+                        pass
                     if attempt < max_retries - 1:
-                        time.sleep(1)
+                        time.sleep(2)
                         continue
                     return []
                 finally: 
-                    bs.logout()
+                    try:
+                        bs.logout()
+                    except:
+                        pass
                 
                 if stocks:
                     return stocks[:self.MAX_SCAN_LIMIT]
