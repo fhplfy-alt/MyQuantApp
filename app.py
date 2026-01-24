@@ -8,7 +8,7 @@ def check_password():
         st.markdown("### 🔐 V45 智能量化系统安全验证")
         pwd = st.text_input("请输入访问密码", type="password")
         if st.button("登录"):
-            if pwd == "vip888":
+            if pwd == "vip666888":
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
@@ -369,30 +369,33 @@ class QuantsEngine:
             # 计算涨跌幅
             changes = [(p - current_price) / current_price * 100 for p in pred_prices]
             
-            # 生成日期（后三天）
+            # 生成日期（后三天）：明日/后日/大后日
             last_date = pd.to_datetime(df['date'].iloc[-1])
+            date_labels = ["明日", "后日", "大后日"]
             dates = []
-            for i in range(1, 4):
-                next_date = last_date + datetime.timedelta(days=i)
+            day_offset = 1
+            for i in range(3):
+                next_date = last_date + datetime.timedelta(days=day_offset)
                 # 跳过周末
                 while next_date.weekday() >= 5:  # 5=Saturday, 6=Sunday
                     next_date += datetime.timedelta(days=1)
-                dates.append(next_date.strftime("%m-%d"))
+                dates.append(f"{date_labels[i]} ({next_date.strftime('%m-%d')})")
+                day_offset += 1
             
-            # 判断趋势
+            # 判断趋势（颜色：红色=上涨，绿色=下跌，蓝色=横盘）
             avg_change = np.mean(changes)
             if avg_change > 2:
-                color = "green"
+                color = "red"  # 红色=预测上涨
                 title = "📈 AI预测：上涨趋势"
                 desc = f"预计未来三天平均涨幅 {avg_change:.2f}%"
                 action = "建议持有或逢低买入"
             elif avg_change < -2:
-                color = "red"
+                color = "green"  # 绿色=预测下跌
                 title = "📉 AI预测：下跌趋势"
                 desc = f"预计未来三天平均跌幅 {abs(avg_change):.2f}%"
                 action = "建议谨慎观望或减仓"
             else:
-                color = "orange"
+                color = "blue"  # 蓝色=预测横盘
                 title = "➡️ AI预测：震荡整理"
                 desc = f"预计未来三天波动较小，平均变化 {abs(avg_change):.2f}%"
                 action = "建议持有观望"
@@ -446,7 +449,7 @@ class QuantsEngine:
                     y=df['MA5'],
                     mode='lines',
                     name='MA5',
-                    line=dict(color='yellow', width=1)
+                    line=dict(color='orange', width=1)
                 ))
             
             if 'MA20' in df.columns:
@@ -464,7 +467,7 @@ class QuantsEngine:
                     y=df['MA200'],
                     mode='lines',
                     name='MA200',
-                    line=dict(color='purple', width=1)
+                    line=dict(color='purple', width=1, dash='dash')
                 ))
             
             # 添加布林带
@@ -496,72 +499,129 @@ class QuantsEngine:
                         showlegend=False
                     ))
             
-            # 识别买卖信号
-            buy_signals = []
-            sell_signals = []
+            # 识别买卖信号（区分不同强度）
+            strong_buy_signals = []  # 红色"强买"：200日均线趋势
+            medium_buy_signals = []  # 橙色"买入"：RSI/KDJ/布林带
+            basic_buy_signals = []   # 黄色"B"：MA金叉
+            sell_signals = []        # 绿色"卖出"：MA死叉
             
             for i in range(1, len(df)):
                 curr = df.iloc[i]
                 prev = df.iloc[i-1]
                 
-                # 买入信号
-                # 1. MA5上穿MA20（金叉）
-                if i >= 20:
-                    if prev['MA5'] <= prev['MA20'] and curr['MA5'] > curr['MA20']:
-                        buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98))
+                # 1. 最强买入信号：200日均线趋势（红色"强买"）
+                if i >= 200 and df['MA200'] is not None and not df['MA200'].isna().all():
+                    ma200_curr = df['MA200'].iloc[i]
+                    ma200_prev = df['MA200'].iloc[i-1] if i >= 201 else ma200_curr
+                    if curr['close'] > ma200_curr and ma200_curr > ma200_prev:
+                        strong_buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98, "强买"))
                 
-                # 2. RSI超卖反弹
+                # 2. 中等强度买入信号：RSI/KDJ/布林带（橙色"买入"）
+                # RSI超卖反弹
                 if i >= 15:
                     curr_rsi = self.calc_rsi(df.iloc[:i+1])
                     prev_rsi = self.calc_rsi(df.iloc[:i])
                     if prev_rsi is not None and curr_rsi is not None:
                         if prev_rsi < 30 and curr_rsi > 35:
-                            buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98))
+                            medium_buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98, "买入"))
                 
-                # 3. KDJ金叉
+                # KDJ金叉
                 if i >= 10:
                     curr_k, curr_d, _ = self.calc_kdj(df.iloc[:i+1])
                     prev_k, prev_d, _ = self.calc_kdj(df.iloc[:i])
                     if prev_k is not None and prev_d is not None and curr_k is not None and curr_d is not None:
                         if prev_k <= prev_d and curr_k > curr_d:
-                            buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98))
+                            medium_buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98, "买入"))
                 
-                # 卖出信号
-                # 1. MA5下穿MA20（死叉）
+                # 布林带突破
+                if i >= 20 and bb_upper is not None:
+                    if curr['close'] > bb_upper and curr['volume'] > df['volume'].iloc[max(0, i-20):i].mean() * 1.2:
+                        medium_buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98, "买入"))
+                
+                # 3. 基础买入信号：MA5上穿MA20（金叉）（黄色"B"）
+                if i >= 20:
+                    if prev['MA5'] <= prev['MA20'] and curr['MA5'] > curr['MA20']:
+                        basic_buy_signals.append((df['date'].iloc[i], curr['low'] * 0.98, "B"))
+                
+                # 卖出信号：MA5下穿MA20（死叉）（绿色"卖出"）
                 if i >= 20:
                     if prev['MA5'] >= prev['MA20'] and curr['MA5'] < curr['MA20']:
-                        sell_signals.append((df['date'].iloc[i], curr['high'] * 1.02))
+                        sell_signals.append((df['date'].iloc[i], curr['high'] * 1.02, "卖出"))
             
-            # 添加买入信号标记
-            if buy_signals:
-                buy_dates, buy_prices = zip(*buy_signals)
+            # 添加最强买入信号标记（红色"强买"）
+            if strong_buy_signals:
+                dates, prices, _ = zip(*strong_buy_signals)
                 fig.add_trace(go.Scatter(
-                    x=list(buy_dates),
-                    y=list(buy_prices),
-                    mode='markers',
-                    name='买入信号',
+                    x=list(dates),
+                    y=list(prices),
+                    mode='markers+text',
+                    name='强买',
+                    text=['强买'] * len(dates),
+                    textposition='top center',
+                    marker=dict(
+                        symbol='triangle-up',
+                        size=15,
+                        color='red',
+                        line=dict(width=2, color='darkred')
+                    ),
+                    textfont=dict(size=10, color='red')
+                ))
+            
+            # 添加中等强度买入信号标记（橙色"买入"）
+            if medium_buy_signals:
+                dates, prices, _ = zip(*medium_buy_signals)
+                fig.add_trace(go.Scatter(
+                    x=list(dates),
+                    y=list(prices),
+                    mode='markers+text',
+                    name='买入',
+                    text=['买入'] * len(dates),
+                    textposition='top center',
                     marker=dict(
                         symbol='triangle-up',
                         size=12,
-                        color='red',
-                        line=dict(width=2, color='darkred')
-                    )
+                        color='orange',
+                        line=dict(width=2, color='darkorange')
+                    ),
+                    textfont=dict(size=9, color='orange')
                 ))
             
-            # 添加卖出信号标记
-            if sell_signals:
-                sell_dates, sell_prices = zip(*sell_signals)
+            # 添加基础买入信号标记（黄色"B"）
+            if basic_buy_signals:
+                dates, prices, _ = zip(*basic_buy_signals)
                 fig.add_trace(go.Scatter(
-                    x=list(sell_dates),
-                    y=list(sell_prices),
-                    mode='markers',
-                    name='卖出信号',
+                    x=list(dates),
+                    y=list(prices),
+                    mode='markers+text',
+                    name='B',
+                    text=['B'] * len(dates),
+                    textposition='top center',
+                    marker=dict(
+                        symbol='triangle-up',
+                        size=10,
+                        color='yellow',
+                        line=dict(width=1, color='gold')
+                    ),
+                    textfont=dict(size=8, color='darkgoldenrod')
+                ))
+            
+            # 添加卖出信号标记（绿色"卖出"）
+            if sell_signals:
+                dates, prices, _ = zip(*sell_signals)
+                fig.add_trace(go.Scatter(
+                    x=list(dates),
+                    y=list(prices),
+                    mode='markers+text',
+                    name='卖出',
+                    text=['卖出'] * len(dates),
+                    textposition='bottom center',
                     marker=dict(
                         symbol='triangle-down',
                         size=12,
                         color='green',
                         line=dict(width=2, color='darkgreen')
-                    )
+                    ),
+                    textfont=dict(size=9, color='green')
                 ))
             
             # 更新布局
@@ -645,11 +705,14 @@ if st.session_state['valid_options']:
                     st.plotly_chart(fig, use_container_width=True)
                     st.info("""
                     💡 **图例说明**: 
-                    - 🔺 **红色向上三角** = 买入信号（金叉、RSI超卖反弹、KDJ金叉等）
-                    - 🔻 **绿色向下三角** = 卖出信号（死叉等）
-                    - **黄色线** = MA5均线
-                    - **蓝色线** = MA20均线
-                    - **紫色线** = MA200均线（如有足够数据）
+                    - 🔺 **红色"强买"** = 200日均线趋势信号，最强买入信号
+                    - 🔺 **橙色"买入"** = RSI/KDJ/布林带信号，中等强度买入
+                    - 🔺 **黄色"B"** = MA金叉信号，基础买入信号
+                    - 🔻 **绿色"卖出"** = MA死叉信号，建议卖出
+                    - **橙色线** = MA5均线（5日移动平均线）
+                    - **蓝色线** = MA20均线（20日移动平均线）
+                    - **紫色虚线** = MA200均线（200日移动平均线，长期趋势）
+                    - **灰色区域** = 布林带（价格波动范围）
                     - 信号仅供参考，投资需谨慎
                     """)
                 
@@ -671,37 +734,38 @@ if st.session_state['valid_options']:
                     else:
                         st.warning(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
                     
-                    # 显示后三天详细预测
-                    st.markdown("#### 📅 未来三天价格预测")
+                    # 显示后三天详细预测（明日/后日/大后日）
+                    st.markdown("#### 📅 AI 时空推演 (未来3日)")
                     pred_cols = st.columns(3)
                     for i in range(3):
                         pred_price = future['prices'][i]
                         change = future['changes'][i]
-                        date_label = future['dates'][i]
+                        date_label = future['dates'][i]  # 已经是"明日 (MM-DD)"格式
+                        change_amount = pred_price - current_price
                         
                         with pred_cols[i]:
                             if change > 0:
                                 st.metric(
-                                    label=f"T+{i+1} ({date_label})",
+                                    label=date_label,
                                     value=f"¥{pred_price:.2f}",
-                                    delta=f"+{change:.2f}%",
+                                    delta=f"{change_amount:+.2f} ({change:+.2f}%)",
                                     delta_color="inverse"
                                 )
                             else:
                                 st.metric(
-                                    label=f"T+{i+1} ({date_label})",
+                                    label=date_label,
                                     value=f"¥{pred_price:.2f}",
-                                    delta=f"{change:.2f}%",
+                                    delta=f"{change_amount:+.2f} ({change:+.2f}%)",
                                     delta_color="normal"
                                 )
                     
                     # 显示预测数据表格
                     with st.expander("📋 查看详细预测数据"):
                         pred_df = pd.DataFrame({
-                            '日期': [f"T+{i+1} ({future['dates'][i]})" for i in range(3)],
+                            '日期': future['dates'],  # 已经是"明日 (MM-DD)"格式
                             '预测价格': [f"¥{p:.2f}" for p in future['prices']],
-                            '涨跌幅': [f"{c:+.2f}%" for c in future['changes']],
-                            '相对当前价': [f"{((p - current_price) / current_price * 100):+.2f}%" for p in future['prices']]
+                            '涨跌金额': [f"{p - current_price:+.2f}" for p in future['prices']],
+                            '涨跌幅': [f"{c:+.2f}%" for c in future['changes']]
                         })
                         st.dataframe(pred_df, hide_index=True)
                 else:
