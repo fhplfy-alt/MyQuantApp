@@ -1,6 +1,37 @@
 import streamlit as st
 
 # ==========================================
+# 🔐 密码保护模块
+# ==========================================
+PASSWORD = "vip666888"
+
+def check_password():
+    """密码验证函数"""
+    if 'password_correct' not in st.session_state:
+        st.session_state.password_correct = False
+    
+    if not st.session_state.password_correct:
+        st.title("🔐 系统访问验证")
+        st.markdown("---")
+        password_input = st.text_input("请输入访问密码:", type="password", key="pwd_input")
+        
+        if st.button("🔓 验证", type="primary"):
+            if password_input == PASSWORD:
+                st.session_state.password_correct = True
+                st.rerun()
+            else:
+                st.error("❌ 密码错误，请重试！")
+                st.stop()
+        else:
+            st.stop()
+    
+    return True
+
+# 执行密码验证
+if not check_password():
+    st.stop()
+
+# ==========================================
 # ⚠️ 核心配置
 # ==========================================
 st.set_page_config(
@@ -40,6 +71,10 @@ STRATEGY_TIP = """
 🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中，主力潜伏期。
 📈 多头排列: 股价收阳且重心上移，趋势健康，建议持有。
 🚀 金叉突变: 短期均线向上金叉长期均线，买入信号。
+💎 RSI超卖反弹: RSI<30后回升，超跌反弹机会。
+📊 布林带突破: 价格突破布林带上轨，强势突破信号。
+🎯 KDJ金叉: K线上穿D线，短期买入信号。
+📉 200日均线趋势: 价格站上200日均线，长期上升趋势。
 ⚡ 死叉/空头: 趋势向下或破位，建议规避。
 """
 
@@ -57,7 +92,11 @@ STRATEGY_LOGIC = {
     "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
     "🔥 换手锁仓": "连续2日换手率>5% + 获利筹码>70%",
     "🔴 温和吸筹": "3连阳且累计涨幅<5% + 获利筹码>62%",
-    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价"
+    "📈 多头排列": "昨日收阳 且 今日收盘价 > 昨日收盘价",
+    "💎 RSI超卖反弹": "RSI<30后回升至35以上，超跌反弹机会",
+    "📊 布林带突破": "价格突破布林带上轨 + 成交量放大",
+    "🎯 KDJ金叉": "K线上穿D线 + RSI>50，短期买入信号",
+    "📉 200日均线趋势": "价格站上200日均线 + 均线向上，长期上升趋势"
 }
 
 # ==========================================
@@ -79,6 +118,7 @@ class QuantsEngine:
         if "ST" in name: return False 
         return True
 
+    @st.cache_data(ttl=3600)  # 缓存1小时
     def get_all_stocks(self):
         """获取全市场股票，最多6000只"""
         try:
@@ -98,13 +138,14 @@ class QuantsEngine:
             
             bs.logout()
             return stocks[:self.MAX_SCAN_LIMIT]
-        except:
+        except Exception as e:
             try:
                 bs.logout()
             except:
                 pass
             return []
 
+    @st.cache_data(ttl=3600)  # 缓存1小时
     def get_index_stocks(self, index_type="zz500"):
         bs.login()
         stocks = []
@@ -112,7 +153,8 @@ class QuantsEngine:
             if index_type == "hs300": rs = bs.query_hs300_stocks()
             else: rs = bs.query_zz500_stocks()
             while rs.next(): stocks.append(rs.get_row_data()[1])
-        except: pass
+        except Exception as e:
+            pass
         finally: bs.logout()
         return stocks[:self.MAX_SCAN_LIMIT]
 
@@ -129,6 +171,50 @@ class QuantsEngine:
         if bias > 15: return "High (高危)"
         elif price < ma20: return "Med (破位)"
         else: return "Low (安全)"
+    
+    def calc_rsi(self, df, period=14):
+        """计算RSI相对强弱指标"""
+        try:
+            if len(df) < period + 1:
+                return None
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else None
+        except:
+            return None
+    
+    def calc_kdj(self, df, period=9):
+        """计算KDJ指标"""
+        try:
+            if len(df) < period + 1:
+                return None, None, None
+            low_min = df['low'].rolling(window=period).min()
+            high_max = df['high'].rolling(window=period).max()
+            rsv = (df['close'] - low_min) / (high_max - low_min) * 100
+            
+            k = rsv.ewm(com=2, adjust=False).mean()
+            d = k.ewm(com=2, adjust=False).mean()
+            j = 3 * k - 2 * d
+            
+            return k.iloc[-1], d.iloc[-1], j.iloc[-1]
+        except:
+            return None, None, None
+    
+    def calc_bollinger(self, df, period=20, std_dev=2):
+        """计算布林带指标"""
+        try:
+            if len(df) < period:
+                return None, None, None
+            ma = df['close'].rolling(window=period).mean()
+            std = df['close'].rolling(window=period).std()
+            upper = ma + (std * std_dev)
+            lower = ma - (std * std_dev)
+            return upper.iloc[-1], ma.iloc[-1], lower.iloc[-1]
+        except:
+            return None, None, None
 
     def _process_single_stock(self, code, max_price=None):
         code = self.clean_code(code)
@@ -151,13 +237,15 @@ class QuantsEngine:
             if not self.is_valid(code, info['name']): return None
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
             while rs.next(): data.append(rs.get_row_data())
-        except: return None
+        except Exception as e:
+            return None
 
         if not data: return None
         try:
             df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"])
             df = df.apply(pd.to_numeric, errors='coerce')
-        except: return None
+        except Exception as e:
+            return None
         if len(df) < 60: return None
 
         curr = df.iloc[-1]
@@ -172,7 +260,13 @@ class QuantsEngine:
 
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA20'] = df['close'].rolling(20).mean()
+        df['MA200'] = df['close'].rolling(200).mean() if len(df) >= 200 else pd.Series([None] * len(df))
         risk_level = self.calc_risk_level(curr['close'], df['MA5'].iloc[-1], df['MA20'].iloc[-1])
+
+        # 计算新的技术指标
+        rsi = self.calc_rsi(df)
+        k, d, j = self.calc_kdj(df)
+        bb_upper, bb_mid, bb_lower = self.calc_bollinger(df)
 
         signal_tags = []
         priority = 0
@@ -219,6 +313,45 @@ class QuantsEngine:
                  action = "HOLD (持有)"
                  priority = 10
                  signal_tags.append("📈多头")
+        
+        # 新增策略：RSI超卖反弹
+        if rsi is not None:
+            if rsi < 30 and len(df) >= 2:
+                prev_rsi = self.calc_rsi(df.iloc[:-1])
+                if prev_rsi is not None and prev_rsi < rsi and rsi > 35:
+                    signal_tags.append("💎RSI超卖反弹")
+                    priority = max(priority, 65)
+                    if action == "WAIT (观望)":
+                        action = "BUY (低吸)"
+        
+        # 新增策略：布林带突破
+        if bb_upper is not None and bb_lower is not None:
+            if curr['close'] > bb_upper and curr['volume'] > df['volume'].tail(20).mean() * 1.2:
+                signal_tags.append("📊布林带突破")
+                priority = max(priority, 75)
+                if action in ["WAIT (观望)", "HOLD (持有)"]:
+                    action = "BUY (博弈)"
+        
+        # 新增策略：KDJ金叉
+        if k is not None and d is not None:
+            if len(df) >= 2:
+                prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1])
+                if prev_k is not None and prev_d is not None:
+                    if prev_k <= prev_d and k > d and rsi is not None and rsi > 50:
+                        signal_tags.append("🎯KDJ金叉")
+                        priority = max(priority, 70)
+                        if action in ["WAIT (观望)", "HOLD (持有)"]:
+                            action = "BUY (博弈)"
+        
+        # 新增策略：200日均线趋势
+        if len(df) >= 200 and not pd.isna(df['MA200'].iloc[-1]):
+            ma200_current = df['MA200'].iloc[-1]
+            ma200_prev = df['MA200'].iloc[-2] if len(df) >= 201 else ma200_current
+            if curr['close'] > ma200_current and ma200_current > ma200_prev:
+                signal_tags.append("📉200日均线趋势")
+                priority = max(priority, 80)
+                if action in ["WAIT (观望)", "HOLD (持有)", "BUY (低吸)"]:
+                    action = "BUY (低吸)" if action == "WAIT (观望)" else action
 
         if priority == 0: return None
 
@@ -270,10 +403,13 @@ class QuantsEngine:
                     results.append(res["result"])
                     if res["alert"]: alerts.append(res["alert"])
                     valid_codes_list.append(res["option"])
-            except:
-                bs.logout()
-                time.sleep(0.5)
-                bs.login()
+            except Exception as e:
+                try:
+                    bs.logout()
+                    time.sleep(0.5)
+                    bs.login()
+                except:
+                    pass
                 continue
 
         bs.logout()
@@ -328,29 +464,65 @@ class QuantsEngine:
         except Exception as e:
             try:
                 bs.logout()
-            except:
+            except Exception:
                 pass
             return None
 
     def run_ai_prediction(self, df):
-        """AI预测 - 增加异常处理"""
-        if df is None or len(df) < 20:
+        """AI预测 - 改进版，使用更多特征"""
+        if df is None or len(df) < 30:
             return None
             
         try:
-            recent = df.tail(20).reset_index(drop=True)
-            X = np.array(recent.index).reshape(-1, 1)
-            y = recent['close'].values
+            # 使用更多历史数据
+            recent = df.tail(30).reset_index(drop=True)
+            
+            # 计算特征：价格、成交量、技术指标
+            X_features = []
+            y_values = []
+            
+            for i in range(5, len(recent)):
+                features = [
+                    recent.iloc[i-1]['close'],
+                    recent.iloc[i-2]['close'] if i >= 2 else recent.iloc[i-1]['close'],
+                    recent.iloc[i-1]['volume'],
+                    recent.iloc[i-1]['close'] - recent.iloc[i-2]['close'] if i >= 2 else 0,
+                ]
+                # 添加移动平均特征
+                if i >= 5:
+                    features.append(recent.iloc[i-5:i]['close'].mean())
+                else:
+                    features.append(recent.iloc[i-1]['close'])
+                
+                X_features.append(features)
+                y_values.append(recent.iloc[i]['close'])
+            
+            if len(X_features) < 5:
+                return None
+            
+            X = np.array(X_features)
+            y = np.array(y_values)
             
             # 检查数据有效性
-            if len(y) < 5 or np.isnan(y).any():
+            if np.isnan(X).any() or np.isnan(y).any():
                 return None
                 
             model = LinearRegression()
             model.fit(X, y)
-            last_idx = recent.index[-1]
-            future_idx = np.array([[last_idx + 1], [last_idx + 2], [last_idx + 3]])
-            pred_prices = model.predict(future_idx)
+            
+            # 预测未来3天
+            last_features = X_features[-1]
+            pred_prices = []
+            for day in range(1, 4):
+                # 使用前一天的预测作为输入（简化版）
+                if day == 1:
+                    pred_price = model.predict([last_features])[0]
+                else:
+                    # 更新特征进行预测
+                    new_features = last_features.copy()
+                    new_features[0] = pred_prices[-1]  # 使用前一天的预测
+                    pred_price = model.predict([new_features])[0]
+                pred_prices.append(max(0, pred_price))  # 确保价格不为负
             
             future_dates = []
             current_date = datetime.date.today()
@@ -358,27 +530,31 @@ class QuantsEngine:
                 d = current_date + datetime.timedelta(days=i)
                 future_dates.append(d.strftime("%Y-%m-%d"))
 
-            slope = model.coef_[0]
+            # 计算趋势斜率（基于预测价格的变化）
+            slope = (pred_prices[1] - pred_prices[0]) / pred_prices[0] if pred_prices[0] > 0 else 0
             last_price = df['close'].iloc[-1]
             
-            if slope > 0.05:
+            # 基于预测价格变化率判断趋势
+            price_change_pct = (pred_prices[1] - last_price) / last_price * 100 if last_price > 0 else 0
+            
+            if price_change_pct > 2:
                 hint_title = "🚀 上升通道加速中"
-                hint_desc = f"惯性推演：股价将在 **{future_dates[1]}** 尝试冲击 **¥{pred_prices[1]:.2f}**。"
+                hint_desc = f"惯性推演：股价将在 **{future_dates[1]}** 尝试冲击 **¥{pred_prices[1]:.2f}** (预计涨幅 {price_change_pct:.2f}%)。"
                 action = "建议：坚定持有 / 逢低买入"
                 color = "red"
-            elif slope > 0:
+            elif price_change_pct > 0:
                 hint_title = "📈 震荡缓慢上行"
-                hint_desc = f"趋势温和，预计 **{future_dates[1]}** 到达 **¥{pred_prices[1]:.2f}**。"
+                hint_desc = f"趋势温和，预计 **{future_dates[1]}** 到达 **¥{pred_prices[1]:.2f}** (预计涨幅 {price_change_pct:.2f}%)。"
                 action = "建议：耐心持股"
                 color = "red"
-            elif slope < -0.05:
+            elif price_change_pct < -2:
                 hint_title = "📉 下跌趋势加速"
-                hint_desc = f"空头较强，预计 **{future_dates[1]}** 回落至 **¥{pred_prices[1]:.2f}**。"
+                hint_desc = f"空头较强，预计 **{future_dates[1]}** 回落至 **¥{pred_prices[1]:.2f}** (预计跌幅 {abs(price_change_pct):.2f}%)。"
                 action = "建议：反弹卖出"
                 color = "green"
             else:
                 hint_title = "⚖️ 横盘震荡"
-                hint_desc = f"多空平衡，预计 **{future_dates[1]}** 在 **¥{pred_prices[1]:.2f}** 震荡。"
+                hint_desc = f"多空平衡，预计 **{future_dates[1]}** 在 **¥{pred_prices[1]:.2f}** 震荡 (预计变化 {price_change_pct:.2f}%)。"
                 action = "建议：观望"
                 color = "blue"
 
@@ -404,7 +580,7 @@ class QuantsEngine:
             }
 
     def calc_indicators(self, df):
-        """计算技术指标 - 增加异常处理"""
+        """计算技术指标 - 增加异常处理，包含RSI、KDJ、布林带等"""
         if df is None or df.empty:
             return df
             
@@ -412,19 +588,57 @@ class QuantsEngine:
             df = df.copy()
             df['MA5'] = df['close'].rolling(5).mean()
             df['MA20'] = df['close'].rolling(20).mean()
+            if len(df) >= 200:
+                df['MA200'] = df['close'].rolling(200).mean()
             
-            # 尝试计算MACD，但忽略错误
+            # 计算MACD
             try:
                 exp1 = df['close'].ewm(span=12, adjust=False).mean()
                 exp2 = df['close'].ewm(span=26, adjust=False).mean()
                 df['DIF'] = exp1 - exp2
                 df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
                 df['MACD'] = 2 * (df['DIF'] - df['DEA'])
-            except:
+            except Exception:
+                pass
+            
+            # 计算RSI
+            try:
+                if len(df) >= 15:
+                    delta = df['close'].diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                    rs = gain / loss
+                    df['RSI'] = 100 - (100 / (1 + rs))
+            except Exception:
+                pass
+            
+            # 计算KDJ
+            try:
+                if len(df) >= 10:
+                    period = 9
+                    low_min = df['low'].rolling(window=period).min()
+                    high_max = df['high'].rolling(window=period).max()
+                    rsv = (df['close'] - low_min) / (high_max - low_min) * 100
+                    df['K'] = rsv.ewm(com=2, adjust=False).mean()
+                    df['D'] = df['K'].ewm(com=2, adjust=False).mean()
+                    df['J'] = 3 * df['K'] - 2 * df['D']
+            except Exception:
+                pass
+            
+            # 计算布林带
+            try:
+                if len(df) >= 20:
+                    period = 20
+                    std_dev = 2
+                    df['BB_Mid'] = df['close'].rolling(window=period).mean()
+                    std = df['close'].rolling(window=period).std()
+                    df['BB_Upper'] = df['BB_Mid'] + (std * std_dev)
+                    df['BB_Lower'] = df['BB_Mid'] - (std * std_dev)
+            except Exception:
                 pass
                 
             return df
-        except:
+        except Exception:
             return df
 
     def plot_professional_kline(self, df, title):
@@ -441,7 +655,7 @@ class QuantsEngine:
                 try:
                     df.loc[(df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 'Signal'] = 1 
                     df.loc[(df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), 'Signal'] = -1 
-                except:
+                except Exception:
                     pass
 
             buy_points = df[df['Signal'] == 1]
@@ -459,6 +673,21 @@ class QuantsEngine:
             
             if 'MA20' in df.columns:
                 fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
+            
+            # 添加200日均线（如果数据足够）
+            if 'MA200' in df.columns and not df['MA200'].isna().all():
+                fig.add_trace(go.Scatter(x=df['date'], y=df['MA200'], name='MA200', line=dict(color='purple', width=1, dash='dash')))
+            
+            # 添加布林带
+            if 'BB_Upper' in df.columns and 'BB_Lower' in df.columns:
+                try:
+                    fig.add_trace(go.Scatter(x=df['date'], y=df['BB_Upper'], name='布林上轨', 
+                                           line=dict(color='gray', width=1, dash='dot'), opacity=0.5))
+                    fig.add_trace(go.Scatter(x=df['date'], y=df['BB_Lower'], name='布林下轨', 
+                                           line=dict(color='gray', width=1, dash='dot'), opacity=0.5,
+                                           fill='tonexty', fillcolor='rgba(128,128,128,0.1)'))
+                except:
+                    pass
 
             # 安全添加买卖点
             if not buy_points.empty:
@@ -466,7 +695,7 @@ class QuantsEngine:
                     fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, mode='markers+text', 
                                            marker=dict(symbol='triangle-up', size=12, color='red'), 
                                            text='B', textposition='bottom center', name='买入'))
-                except:
+                except Exception:
                     pass
             
             if not sell_points.empty:
@@ -474,7 +703,7 @@ class QuantsEngine:
                     fig.add_trace(go.Scatter(x=sell_points['date'], y=sell_points['high']*1.02, mode='markers+text', 
                                            marker=dict(symbol='triangle-down', size=12, color='green'), 
                                            text='S', textposition='top center', name='卖出'))
-                except:
+                except Exception:
                     pass
 
             fig.update_layout(title=f"{title} - 智能操盘K线", xaxis_rangeslider_visible=False, height=500)
