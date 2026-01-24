@@ -742,60 +742,60 @@ if st.session_state['valid_options']:
                     future = engine.run_ai_prediction(df)
                     if future:
                         col1, col2, col3 = st.columns(3)
-                    
-                    # 显示当前价格
-                    current_price = future['current_price']
-                    col1.metric("当前价格", f"¥{current_price:.2f}")
-                    
-                    # 显示预测信息
-                    if future['color'] == 'green':
-                        st.success(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
-                    elif future['color'] == 'red':
-                        st.error(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
-                    else:
-                        st.warning(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
-
-                    # 显示后三天详细预测（明日/后日/大后日）
-                    st.markdown("#### 📅 AI 时空推演 (未来3日)")
-                    pred_cols = st.columns(3)
-                    for i in range(3):
-                        pred_price = future['prices'][i]
-                        change = future['changes'][i]
-                        date_label = future['dates'][i]  # 已经是"明日 (MM-DD)"格式
-                        change_amount = pred_price - current_price
                         
-                        with pred_cols[i]:
-                            if change > 0:
-                                st.metric(
-                                    label=date_label,
-                                    value=f"¥{pred_price:.2f}",
-                                    delta=f"{change_amount:+.2f} ({change:+.2f}%)",
-                                    delta_color="inverse"
-                                )
-                            else:
-                                st.metric(
-                                    label=date_label,
-                                    value=f"¥{pred_price:.2f}",
-                                    delta=f"{change_amount:+.2f} ({change:+.2f}%)",
-                                    delta_color="normal"
-                                )
+                        # 显示当前价格
+                        current_price = future['current_price']
+                        col1.metric("当前价格", f"¥{current_price:.2f}")
+                        
+                        # 显示预测信息
+                        if future['color'] == 'green':
+                            st.success(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                        elif future['color'] == 'red':
+                            st.error(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                        else:
+                            st.warning(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+
+                        # 显示后三天详细预测（明日/后日/大后日）
+                        st.markdown("#### 📅 AI 时空推演 (未来3日)")
+                        pred_cols = st.columns(3)
+                        for i in range(3):
+                            pred_price = future['prices'][i]
+                            change = future['changes'][i]
+                            date_label = future['dates'][i]  # 已经是"明日 (MM-DD)"格式
+                            change_amount = pred_price - current_price
+                            
+                            with pred_cols[i]:
+                                if change > 0:
+                                    st.metric(
+                                        label=date_label,
+                                        value=f"¥{pred_price:.2f}",
+                                        delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                        delta_color="inverse"
+                                    )
+                                else:
+                                    st.metric(
+                                        label=date_label,
+                                        value=f"¥{pred_price:.2f}",
+                                        delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                        delta_color="normal"
+                                    )
+                        
+                        # 显示预测数据表格
+                        with st.expander("📋 查看详细预测数据"):
+                            pred_df = pd.DataFrame({
+                                '日期': future['dates'],  # 已经是"明日 (MM-DD)"格式
+                                '预测价格': [f"¥{p:.2f}" for p in future['prices']],
+                                '涨跌金额': [f"{p - current_price:+.2f}" for p in future['prices']],
+                                '涨跌幅': [f"{c:+.2f}%" for c in future['changes']]
+                            })
+                            st.dataframe(pred_df, hide_index=True)
+                    else:
+                        st.warning("⚠️ AI预测数据不足，无法生成预测")
                     
-                    # 显示预测数据表格
-                    with st.expander("📋 查看详细预测数据"):
-                        pred_df = pd.DataFrame({
-                            '日期': future['dates'],  # 已经是"明日 (MM-DD)"格式
-                            '预测价格': [f"¥{p:.2f}" for p in future['prices']],
-                            '涨跌金额': [f"{p - current_price:+.2f}" for p in future['prices']],
-                            '涨跌幅': [f"{c:+.2f}%" for c in future['changes']]
-                        })
-                        st.dataframe(pred_df, hide_index=True)
-                else:
-                    st.warning("⚠️ AI预测数据不足，无法生成预测")
-                
                     # 显示最近交易数据
                     with st.expander("📋 查看最近交易数据"):
                         st.dataframe(df.tail(20), hide_index=True)
-            else:
-                st.error("❌ 数据获取失败，请重试")
+                else:
+                    st.error("❌ 数据获取失败，请重试")
 
 st.caption("💡 使用提示：扫描时请勿刷新页面。投资有风险。")
