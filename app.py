@@ -1769,7 +1769,7 @@ if 'scan_res' in st.session_state:
     # 修复：安全创建DataFrame，处理空结果的情况
     if results and len(results) > 0:
         try:
-    df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
+            df_scan = pd.DataFrame(results).sort_values(by="priority", ascending=False)
         except Exception as e:
             st.error(f"❌ 数据处理错误: {str(e)}")
             df_scan = pd.DataFrame()
