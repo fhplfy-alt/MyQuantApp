@@ -76,6 +76,21 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ==========================================
+# 🆕 V45 新功能提示（必须显示在最前面）
+# ==========================================
+st.markdown("""
+<div style='background-color: #00ff00; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+<h2 style='color: #000; text-align: center;'>🎉 V45 新功能已激活！🎉</h2>
+<p style='color: #000; font-size: 16px; text-align: center;'>
+✅ 多策略并行扫描 | ✅ 策略参数自定义 | ✅ 历史回测功能 | ✅ 结果导出 | ✅ 扫描历史记录
+</p>
+<p style='color: #000; font-size: 14px; text-align: center;'>
+👉 请查看左侧边栏的"🆕 V45 新功能"区域
+</p>
+</div>
+""", unsafe_allow_html=True)
+
 st.title("🛡️ V45 智能量化系统 (全信号图例版)")
 st.caption("✅ 系统已就绪 | 核心组件加载完成 | 支持6000股扫描 | V45 Build")
 
@@ -1515,12 +1530,15 @@ if 'scan_history' not in st.session_state:
 
 st.sidebar.header("🕹️ 控制台")
 
-# 🆕 新功能直接显示区域
+# ==========================================
+# 🆕 V45 新功能区域（必须显示）
+# ==========================================
 st.sidebar.markdown("---")
-st.sidebar.markdown("## 🆕 V45 新功能")
+st.sidebar.markdown("### 🆕 V45 新功能")
+st.sidebar.markdown("**✨ 多策略并行扫描已启用**")
 
 # 1. 多策略配置（直接显示，不折叠）
-st.sidebar.markdown("### 🔀 多策略扫描")
+st.sidebar.markdown("#### 🔀 多策略扫描")
 strategy_options = st.sidebar.multiselect(
     "选择策略（可多选）:",
     ["均线突破", "RSI超卖反弹", "量价背离", "KDJ金叉", "布林带突破", "温和吸筹", "换手锁仓", "妖股基因", "四星共振"],
@@ -1529,11 +1547,14 @@ strategy_options = st.sidebar.multiselect(
 )
 st.session_state['selected_strategies'] = strategy_options
 
+if not strategy_options:
+    st.sidebar.warning("⚠️ 请至少选择一个策略")
+
 comparison_mode = st.sidebar.checkbox("启用策略对比模式", value=False, key="comparison_checkbox")
 st.session_state['comparison_mode'] = comparison_mode
 
 if comparison_mode:
-    st.sidebar.info("🔍 对比模式已启用")
+    st.sidebar.success("🔍 对比模式已启用")
 
 # 2. 基本参数设置
 st.sidebar.markdown("---")
