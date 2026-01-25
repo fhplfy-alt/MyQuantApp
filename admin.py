@@ -22,9 +22,19 @@ def hash_password(password):
 def load_users():
     """加载用户数据"""
     try:
+        # 获取当前工作目录和文件路径（用于调试）
+        current_dir = os.getcwd()
+        file_path = os.path.abspath(USERS_FILE)
+        
         if os.path.exists(USERS_FILE):
             with open(USERS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
+        else:
+            # 调试信息：如果文件不存在，尝试列出当前目录的文件
+            try:
+                files_in_dir = os.listdir('.')
+            except:
+                files_in_dir = []
     except Exception as e:
         pass
     return {}
@@ -90,7 +100,7 @@ st.caption("用户数据管理与统计")
 st.sidebar.header("📊 管理功能")
 page = st.sidebar.radio(
     "选择功能",
-    ["用户列表", "持仓详情", "数据统计", "数据导出"]
+    ["用户列表", "持仓详情", "数据统计", "数据导出", "🔧 调试信息"]
 )
 
 # ==========================================
@@ -430,6 +440,84 @@ elif page == "数据导出":
                 )
             else:
                 st.info("📭 暂无数据")
+
+# ==========================================
+# 5. 调试信息
+# ==========================================
+elif page == "🔧 调试信息":
+    st.header("🔧 系统调试信息")
+    
+    # 显示当前工作目录
+    st.subheader("📁 文件系统信息")
+    current_dir = os.getcwd()
+    st.code(f"当前工作目录: {current_dir}")
+    
+    # 显示文件路径
+    users_file_path = os.path.abspath(USERS_FILE)
+    st.code(f"users.json 路径: {users_file_path}")
+    st.code(f"users.json 是否存在: {os.path.exists(USERS_FILE)}")
+    
+    # 列出当前目录的所有文件
+    st.subheader("📋 当前目录文件列表")
+    try:
+        files = os.listdir('.')
+        # 过滤出相关的JSON文件
+        json_files = [f for f in files if f.endswith('.json')]
+        data_files = [f for f in json_files if 'users' in f or 'holdings' in f]
+        
+        if data_files:
+            st.success(f"✅ 找到 {len(data_files)} 个数据文件:")
+            for file in sorted(data_files):
+                file_path = os.path.abspath(file)
+                file_size = os.path.getsize(file) if os.path.exists(file) else 0
+                st.code(f"  - {file} ({file_size} bytes)")
+        else:
+            st.warning("⚠️ 未找到数据文件")
+        
+        # 显示所有文件（用于调试）
+        with st.expander("查看所有文件"):
+            st.code('\n'.join(sorted(files)))
+    except Exception as e:
+        st.error(f"❌ 无法列出文件: {str(e)}")
+    
+    # 尝试加载用户数据
+    st.subheader("👥 用户数据加载测试")
+    users = load_users()
+    if users:
+        st.success(f"✅ 成功加载 {len(users)} 个用户")
+        st.json(users)
+    else:
+        st.warning("⚠️ 未加载到用户数据")
+        # 尝试直接读取文件
+        if os.path.exists(USERS_FILE):
+            st.info("文件存在，尝试直接读取...")
+            try:
+                with open(USERS_FILE, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    st.code(f"文件内容长度: {len(content)} 字符")
+                    if content:
+                        try:
+                            data = json.loads(content)
+                            st.success("✅ 文件内容可以解析为JSON")
+                            st.json(data)
+                        except json.JSONDecodeError as e:
+                            st.error(f"❌ JSON解析错误: {str(e)}")
+                            st.code(content[:500])  # 显示前500个字符
+            except Exception as e:
+                st.error(f"❌ 读取文件失败: {str(e)}")
+        else:
+            st.error("❌ users.json 文件不存在")
+    
+    # 测试持仓文件
+    st.subheader("💼 持仓文件测试")
+    if users:
+        for username in list(users.keys())[:5]:  # 只测试前5个用户
+            holdings_file = get_holdings_file(username)
+            exists = os.path.exists(holdings_file)
+            st.code(f"{username}: {holdings_file} - {'存在' if exists else '不存在'}")
+            if exists:
+                holdings = load_user_holdings(username)
+                st.code(f"  持仓数量: {len(holdings)}")
 
 # ==========================================
 # 退出登录
