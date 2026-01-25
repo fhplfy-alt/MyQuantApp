@@ -694,22 +694,26 @@ if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
 # 导出Excel功能（放在sidebar中，确保显示）
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 导出功能")
-if st.session_state.get('scan_res') and len(st.session_state['scan_res']) > 0:
+
+# 检查是否有扫描结果
+scan_res = st.session_state.get('scan_res', [])
+if scan_res and len(scan_res) > 0:
     # 创建DataFrame并排序：priority >= 90的排在最前面
-    df_export = pd.DataFrame(st.session_state['scan_res'])
-    df_export['is_high_priority'] = df_export['priority'] >= 90
-    df_export = df_export.sort_values(by=['is_high_priority', 'priority'], ascending=[False, False])
-    df_export = df_export.drop(columns=['is_high_priority'], errors='ignore')
+    df_export = pd.DataFrame(scan_res)
+    if 'priority' in df_export.columns:
+        df_export['is_high_priority'] = df_export['priority'] >= 90
+        df_export = df_export.sort_values(by=['is_high_priority', 'priority'], ascending=[False, False])
+        df_export = df_export.drop(columns=['is_high_priority'], errors='ignore')
     
     # 移除priority列（内部使用，不需要导出）
     df_export_clean = df_export.drop(columns=['priority'], errors='ignore')
     
     # 创建Excel文件
-    output = BytesIO()
     try:
+        output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_export_clean.to_excel(writer, index=False, sheet_name='扫描结果')
-        output.seek(0)
+        excel_data = output.getvalue()
         
         # 生成文件名（包含日期时间）
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -717,14 +721,17 @@ if st.session_state.get('scan_res') and len(st.session_state['scan_res']) > 0:
         
         st.sidebar.download_button(
             label="📥 导出为Excel",
-            data=output,
+            data=excel_data,
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
+            type="primary",
+            key="export_excel_button"
         )
+    except ImportError:
+        st.sidebar.error("❌ 缺少 openpyxl 库")
+        st.sidebar.info("💡 请运行: pip install openpyxl")
     except Exception as e:
-        st.sidebar.error(f"导出失败: {str(e)}")
-        st.sidebar.info("💡 提示：请先安装 openpyxl: pip install openpyxl")
+        st.sidebar.error(f"❌ 导出失败: {str(e)}")
 else:
     st.sidebar.info("💡 请先进行扫描，扫描完成后可导出结果")
 
