@@ -105,34 +105,34 @@ class QuantsEngine:
 
     def get_all_stocks(self):
         """修复：确保全场扫描能成功获取数据"""
-            try:
+        try:
             bs.login() # 显式重新登录
-                rs = bs.query_all_stock()
-                stocks = []
-                data_list = []
+            rs = bs.query_all_stock()
+            stocks = []
+            data_list = []
             while (rs.error_code == '0') and rs.next():
                 data_list.append(rs.get_row_data())
-                
-                for data in data_list:
-                    if len(data) >= 2:
+            
+            for data in data_list:
+                if len(data) >= 2:
                     code, name = data[0], data[1]
-                        if self.is_valid(code, name):
-                            stocks.append(code)
-                bs.logout()
-                    return stocks[:self.MAX_SCAN_LIMIT]
-                except:
-        return []
+                    if self.is_valid(code, name):
+                        stocks.append(code)
+            bs.logout()
+            return stocks[:self.MAX_SCAN_LIMIT]
+        except:
+            return []
 
     def get_index_stocks(self, index_type="zz500"):
         bs.login()
-                stocks = []
-                try:
+        stocks = []
+        try:
             if index_type == "hs300": rs = bs.query_hs300_stocks()
             else: rs = bs.query_zz500_stocks()
             while rs.next(): stocks.append(rs.get_row_data()[1])
         except: pass
         finally: bs.logout()
-                    return stocks[:self.MAX_SCAN_LIMIT]
+        return stocks[:self.MAX_SCAN_LIMIT]
 
     def calc_winner_rate(self, df, current_price):
         if df.empty: return 0.0
@@ -215,8 +215,8 @@ class QuantsEngine:
         except: return None
 
         if not data: return None
-            df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"])
-            df = df.apply(pd.to_numeric, errors='coerce')
+        df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"])
+        df = df.apply(pd.to_numeric, errors='coerce')
         if len(df) < 60: return None
 
         curr = df.iloc[-1]
@@ -255,12 +255,12 @@ class QuantsEngine:
         
         # 新增策略：RSI超卖反弹
         if rsi is not None and len(df) >= 2:
-                prev_rsi = self.calc_rsi(df.iloc[:-1])
+            prev_rsi = self.calc_rsi(df.iloc[:-1])
             if prev_rsi is not None and prev_rsi < 30 and rsi > 35:
-                    signal_tags.append("💎RSI超卖反弹")
-                    priority = max(priority, 65)
+                signal_tags.append("💎RSI超卖反弹")
+                priority = max(priority, 65)
                 if action in ["WAIT (观望)", "HOLD (持有)"]:
-                        action = "BUY (低吸)"
+                    action = "BUY (低吸)"
         
         # 新增策略：布林带突破
         if bb_upper is not None and bb_lower is not None:
@@ -398,7 +398,7 @@ class QuantsEngine:
                 title = "📉 AI预测：下跌趋势"
                 desc = f"预计未来三天平均跌幅 {abs(avg_change):.2f}%"
                 action = "建议谨慎观望或减仓"
-                else:
+            else:
                 color = "blue"  # 蓝色=预测横盘
                 title = "➡️ AI预测：震荡整理"
                 desc = f"预计未来三天波动较小，平均变化 {abs(avg_change):.2f}%"
@@ -513,7 +513,7 @@ class QuantsEngine:
             basic_buy_signals = []   # 黄色"B"：MA金叉
             sell_signals = []        # 绿色"卖出"：MA死叉
             
-                    for i in range(1, len(df)):
+            for i in range(1, len(df)):
                 curr = df.iloc[i]
                 prev = df.iloc[i-1]
                 
@@ -559,10 +559,10 @@ class QuantsEngine:
             # 添加最强买入信号标记（红色"强买"）
             if strong_buy_signals:
                 dates, prices, _ = zip(*strong_buy_signals)
-                        fig.add_trace(go.Scatter(
+                fig.add_trace(go.Scatter(
                     x=list(dates),
                     y=list(prices),
-                            mode='markers+text', 
+                    mode='markers+text', 
                     name='强买',
                     text=['强买'] * len(dates),
                     textposition='top center',
@@ -573,16 +573,16 @@ class QuantsEngine:
                         line=dict(width=2, color='darkred')
                     ),
                     textfont=dict(size=10, color='red')
-                        ))
+                ))
                     
             # 添加中等强度买入信号标记（橙色"买入"）
             if medium_buy_signals:
                 dates, prices, _ = zip(*medium_buy_signals)
-                        fig.add_trace(go.Scatter(
+                fig.add_trace(go.Scatter(
                     x=list(dates),
                     y=list(prices),
-                            mode='markers+text', 
-                            name='买入',
+                    mode='markers+text', 
+                    name='买入',
                     text=['买入'] * len(dates),
                     textposition='top center',
                     marker=dict(
@@ -592,15 +592,15 @@ class QuantsEngine:
                         line=dict(width=2, color='darkorange')
                     ),
                     textfont=dict(size=9, color='orange')
-                        ))
+                ))
                     
             # 添加基础买入信号标记（黄色"B"）
             if basic_buy_signals:
                 dates, prices, _ = zip(*basic_buy_signals)
-                        fig.add_trace(go.Scatter(
+                fig.add_trace(go.Scatter(
                     x=list(dates),
                     y=list(prices),
-                            mode='markers+text', 
+                    mode='markers+text', 
                     name='B',
                     text=['B'] * len(dates),
                     textposition='top center',
@@ -616,10 +616,10 @@ class QuantsEngine:
             # 添加卖出信号标记（绿色"卖出"）
             if sell_signals:
                 dates, prices, _ = zip(*sell_signals)
-                    fig.add_trace(go.Scatter(
+                fig.add_trace(go.Scatter(
                     x=list(dates),
                     y=list(prices),
-                        mode='markers+text', 
+                    mode='markers+text', 
                     name='卖出',
                     text=['卖出'] * len(dates),
                     textposition='bottom center',
@@ -793,7 +793,7 @@ if st.session_state['valid_options']:
                     st.markdown("### 🤖 AI预测：未来三天走势")
                     future = engine.run_ai_prediction(df)
                     if future:
-                    col1, col2, col3 = st.columns(3)
+                        col1, col2, col3 = st.columns(3)
                         
                         # 显示当前价格
                         current_price = future['current_price']
@@ -820,18 +820,18 @@ if st.session_state['valid_options']:
                                 if change > 0:
                                     st.metric(
                                         label=date_label,
-                                value=f"¥{pred_price:.2f}", 
+                                        value=f"¥{pred_price:.2f}", 
                                         delta=f"{change_amount:+.2f} ({change:+.2f}%)",
                                         delta_color="inverse"
-                            )
-                    else:
+                                    )
+                                else:
                                     st.metric(
                                         label=date_label,
                                         value=f"¥{pred_price:.2f}",
                                         delta=f"{change_amount:+.2f} ({change:+.2f}%)",
                                         delta_color="normal"
                                     )
-                    
+                        
                         # 显示预测数据表格
                         with st.expander("📋 查看详细预测数据"):
                             pred_df = pd.DataFrame({
