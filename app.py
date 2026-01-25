@@ -1647,7 +1647,16 @@ if st.session_state['holdings']:
         with col1:
             st.metric("总成本", f"¥{total_cost:,.2f}")
         with col2:
-            st.metric("总盈亏", f"¥{total_profit:,.2f}", delta=f"{total_profit_rate:.2f}%")
+            # A股习惯：红色=上涨/盈利，绿色=下跌/亏损
+            if total_profit > 0:
+                # 盈利显示红色（inverse反转颜色：正数红色）
+                st.metric("总盈亏", f"¥{total_profit:,.2f}", delta=f"+{total_profit_rate:.2f}%", delta_color="inverse")
+            elif total_profit < 0:
+                # 亏损显示绿色（normal正常颜色：负数绿色）
+                st.metric("总盈亏", f"¥{total_profit:,.2f}", delta=f"{total_profit_rate:.2f}%", delta_color="normal")
+            else:
+                # 盈亏平衡
+                st.metric("总盈亏", f"¥{total_profit:,.2f}", delta="0.00%")
         with col3:
             st.metric("持仓数量", len(st.session_state['holdings']))
         with col4:
