@@ -688,38 +688,51 @@ if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
         res, alerts, opts = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
         st.session_state['scan_res'], st.session_state['valid_options'], st.session_state['alerts'] = res, opts, alerts
 
-# 导出Excel功能
-if st.session_state.get('scan_res'):
-    st.sidebar.markdown("---")
+# 导出Excel功能（放在sidebar中，确保显示）
+st.sidebar.markdown("---")
+if st.session_state.get('scan_res') and len(st.session_state['scan_res']) > 0:
     st.sidebar.subheader("📊 导出功能")
-    df_export = pd.DataFrame(st.session_state['scan_res']).sort_values(by="priority", ascending=False)
+    # 创建DataFrame并排序：priority >= 90的排在最前面
+    df_export = pd.DataFrame(st.session_state['scan_res'])
+    df_export['is_high_priority'] = df_export['priority'] >= 90
+    df_export = df_export.sort_values(by=['is_high_priority', 'priority'], ascending=[False, False])
+    df_export = df_export.drop(columns=['is_high_priority'], errors='ignore')
+    
     # 移除priority列（内部使用，不需要导出）
     df_export_clean = df_export.drop(columns=['priority'], errors='ignore')
     
     # 创建Excel文件
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_export_clean.to_excel(writer, index=False, sheet_name='扫描结果')
-    output.seek(0)
-    
-    # 生成文件名（包含日期时间）
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"股票扫描结果_{timestamp}.xlsx"
-    
-    st.sidebar.download_button(
-        label="📥 导出为Excel",
-        data=output,
-        file_name=filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary"
-    )
+    try:
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_export_clean.to_excel(writer, index=False, sheet_name='扫描结果')
+        output.seek(0)
+        
+        # 生成文件名（包含日期时间）
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"股票扫描结果_{timestamp}.xlsx"
+        
+        st.sidebar.download_button(
+            label="📥 导出为Excel",
+            data=output,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+    except Exception as e:
+        st.sidebar.error(f"导出失败: {str(e)}")
+        st.sidebar.info("💡 提示：请先安装 openpyxl: pip install openpyxl")
 
 # 策略展示逻辑 (保持原样)
 with st.expander("📖 **策略逻辑白皮书**", expanded=False):
     for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
 
 if st.session_state['scan_res']:
-    df_scan = pd.DataFrame(st.session_state['scan_res']).sort_values(by="priority", ascending=False)
+    # 排序：priority >= 90的排在最前面，然后按priority降序
+    df_scan = pd.DataFrame(st.session_state['scan_res'])
+    df_scan['is_high_priority'] = df_scan['priority'] >= 90
+    df_scan = df_scan.sort_values(by=['is_high_priority', 'priority'], ascending=[False, False])
+    df_scan = df_scan.drop(columns=['is_high_priority'], errors='ignore')
     
     # 显示命中股票数量
     total_count = len(df_scan)
