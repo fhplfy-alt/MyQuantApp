@@ -449,11 +449,19 @@ class QuantsEngine:
         }
 
     def scan_market_optimized(self, code_list, max_price=None):
-        # 保持原有的进度条逻辑，增加命中数量显示
+        # 保持原有的进度条逻辑，增加命中数量显示，优化进度显示
         results, alerts, valid_codes_list = [], [], []
         bs.login()
         total = len(code_list)
         progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total}) | 命中: 0 只")
+        
+        # 根据总数决定更新频率
+        if total <= 100:
+            update_interval = 1  # 少于100个，每个都更新
+        elif total <= 500:
+            update_interval = 5  # 100-500个，每5个更新一次
+        else:
+            update_interval = 10  # 500个以上，每10个更新一次
         
         for i, code in enumerate(code_list):
             try:
@@ -463,12 +471,20 @@ class QuantsEngine:
                     if res["alert"]: alerts.append(res["alert"])
                     valid_codes_list.append(res["option"])
             except: continue
-            # 每10个更新一次进度，显示命中数量
-            if i % 10 == 0 or i == len(code_list) - 1:
+            
+            # 更频繁地更新进度，让用户能看到扫描过程
+            if i % update_interval == 0 or i == len(code_list) - 1:
                 hit_count = len(results)
-                progress_bar.progress((i + 1) / total, text=f"🔍 扫描中: {code} ({i+1}/{total}) | 命中: {hit_count} 只")
+                progress = (i + 1) / total
+                progress_bar.progress(progress, text=f"🔍 扫描中: {code} ({i+1}/{total}) | 命中: {hit_count} 只")
+                # 添加短暂延迟，让进度条显示更清楚（不影响扫描速度）
+                if i % (update_interval * 2) == 0:
+                    time.sleep(0.01)  # 每更新几次才延迟，不影响整体速度
 
         bs.logout()
+        # 显示完成状态，延迟一下再清除，让用户看到完成
+        progress_bar.progress(1.0, text=f"✅ 扫描完成！共命中 {len(results)} 只")
+        time.sleep(0.5)  # 显示完成状态0.5秒
         progress_bar.empty()
         return results, alerts, valid_codes_list
 
@@ -1207,28 +1223,35 @@ if scan_res and len(scan_res) > 0:
     
     # 创建Excel文件
     try:
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_export_clean.to_excel(writer, index=False, sheet_name='扫描结果')
-        excel_data = output.getvalue()
-        
-        # 生成文件名（包含日期时间）
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"股票扫描结果_{timestamp}.xlsx"
-        
-        st.sidebar.download_button(
-            label="📥 导出为Excel",
-            data=excel_data,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            key="export_excel_button"
-        )
+        # 确保数据不为空
+        if df_export_clean.empty:
+            st.sidebar.warning("⚠️ 没有可导出的数据")
+        else:
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_export_clean.to_excel(writer, index=False, sheet_name='扫描结果')
+            output.seek(0)  # 重置文件指针到开始位置
+            excel_data = output.getvalue()
+            
+            # 生成文件名（包含日期时间）
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"股票扫描结果_{timestamp}.xlsx"
+            
+            st.sidebar.download_button(
+                label="📥 导出为Excel",
+                data=excel_data,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                key="export_excel_button"
+            )
     except ImportError:
         st.sidebar.error("❌ 缺少 openpyxl 库")
         st.sidebar.info("💡 请运行: pip install openpyxl")
     except Exception as e:
         st.sidebar.error(f"❌ 导出失败: {str(e)}")
+        import traceback
+        st.sidebar.code(traceback.format_exc())
 else:
     st.sidebar.info("💡 请先进行扫描，扫描完成后可导出结果")
 
