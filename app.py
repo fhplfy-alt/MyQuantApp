@@ -312,11 +312,11 @@ class QuantsEngine:
         }
 
     def scan_market_optimized(self, code_list, max_price=None):
-        # 保持原有的进度条逻辑
+        # 保持原有的进度条逻辑，增加命中数量显示
         results, alerts, valid_codes_list = [], [], []
         bs.login()
         total = len(code_list)
-        progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total})")
+        progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total}) | 命中: 0 只")
         
         for i, code in enumerate(code_list):
             try:
@@ -326,7 +326,10 @@ class QuantsEngine:
                     if res["alert"]: alerts.append(res["alert"])
                     valid_codes_list.append(res["option"])
             except: continue
-            if i % 10 == 0: progress_bar.progress((i + 1) / total, text=f"🔍 扫描中: {code} ({i+1}/{total})")
+            # 每10个更新一次进度，显示命中数量
+            if i % 10 == 0 or i == len(code_list) - 1:
+                hit_count = len(results)
+                progress_bar.progress((i + 1) / total, text=f"🔍 扫描中: {code} ({i+1}/{total}) | 命中: {hit_count} 只")
 
         bs.logout()
         progress_bar.empty()
@@ -690,8 +693,8 @@ if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
 
 # 导出Excel功能（放在sidebar中，确保显示）
 st.sidebar.markdown("---")
+st.sidebar.subheader("📊 导出功能")
 if st.session_state.get('scan_res') and len(st.session_state['scan_res']) > 0:
-    st.sidebar.subheader("📊 导出功能")
     # 创建DataFrame并排序：priority >= 90的排在最前面
     df_export = pd.DataFrame(st.session_state['scan_res'])
     df_export['is_high_priority'] = df_export['priority'] >= 90
@@ -722,6 +725,8 @@ if st.session_state.get('scan_res') and len(st.session_state['scan_res']) > 0:
     except Exception as e:
         st.sidebar.error(f"导出失败: {str(e)}")
         st.sidebar.info("💡 提示：请先安装 openpyxl: pip install openpyxl")
+else:
+    st.sidebar.info("💡 请先进行扫描，扫描完成后可导出结果")
 
 # 策略展示逻辑 (保持原样)
 with st.expander("📖 **策略逻辑白皮书**", expanded=False):
