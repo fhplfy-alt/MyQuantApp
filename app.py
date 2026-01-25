@@ -1227,16 +1227,21 @@ if scan_res and len(scan_res) > 0:
         if df_export_clean.empty:
             st.sidebar.warning("⚠️ 没有可导出的数据")
         else:
+            # 使用BytesIO创建Excel文件（修复导出问题）
             output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            with pd.ExcelWriter(output, engine='openpyxl', mode='w') as writer:
                 df_export_clean.to_excel(writer, index=False, sheet_name='扫描结果')
-            output.seek(0)  # 重置文件指针到开始位置
-            excel_data = output.getvalue()
+            
+            # 重置文件指针并获取数据
+            output.seek(0)
+            excel_data = output.read()
+            output.close()
             
             # 生成文件名（包含日期时间）
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"股票扫描结果_{timestamp}.xlsx"
             
+            # 显示导出按钮
             st.sidebar.download_button(
                 label="📥 导出为Excel",
                 data=excel_data,
@@ -1245,13 +1250,15 @@ if scan_res and len(scan_res) > 0:
                 type="primary",
                 key="export_excel_button"
             )
-    except ImportError:
+    except ImportError as import_err:
         st.sidebar.error("❌ 缺少 openpyxl 库")
         st.sidebar.info("💡 请运行: pip install openpyxl")
+        st.sidebar.code(str(import_err))
     except Exception as e:
         st.sidebar.error(f"❌ 导出失败: {str(e)}")
         import traceback
-        st.sidebar.code(traceback.format_exc())
+        with st.sidebar.expander("查看详细错误"):
+            st.code(traceback.format_exc())
 else:
     st.sidebar.info("💡 请先进行扫描，扫描完成后可导出结果")
 
