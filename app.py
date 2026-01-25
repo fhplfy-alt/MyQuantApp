@@ -335,6 +335,23 @@ class QuantsEngine:
         progress_bar.empty()
         return results, alerts, valid_codes_list
 
+    def get_current_price(self, code):
+        """获取股票当前价格"""
+        try:
+            bs.login()
+            code = self.clean_code(code)
+            end = datetime.datetime.now().strftime("%Y-%m-%d")
+            start = (datetime.datetime.now() - datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+            rs = bs.query_history_k_data_plus(code, "date,close", start_date=start, end_date=end, frequency="d", adjustflag="3")
+            data = []
+            while rs.next(): data.append(rs.get_row_data())
+            bs.logout()
+            if data:
+                return float(data[-1][1])  # 返回最新收盘价
+            return None
+        except:
+            return None
+    
     def get_deep_data(self, code):
         """修复白屏的关键：增加严谨的数据校验"""
         try:
@@ -667,6 +684,7 @@ engine = QuantsEngine()
 if 'full_pool' not in st.session_state: st.session_state['full_pool'] = []
 if 'scan_res' not in st.session_state: st.session_state['scan_res'] = []
 if 'valid_options' not in st.session_state: st.session_state['valid_options'] = []
+if 'holdings' not in st.session_state: st.session_state['holdings'] = []  # 持仓列表
 
 st.sidebar.header("🕹️ 控制台")
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
@@ -690,6 +708,55 @@ if st.sidebar.button("🚀 启动全策略扫描 (V45)", type="primary"):
     else:
         res, alerts, opts = engine.scan_market_optimized(final_code_list, max_price=max_price_limit)
         st.session_state['scan_res'], st.session_state['valid_options'], st.session_state['alerts'] = res, opts, alerts
+
+# 我的持仓管理功能
+st.sidebar.markdown("---")
+st.sidebar.subheader("💼 我的持仓")
+
+# 添加持仓表单
+with st.sidebar.expander("➕ 添加持仓", expanded=False):
+    holding_code = st.text_input("股票代码", placeholder="如: 600519", key="holding_code_input")
+    holding_price = st.number_input("买入价格 (元)", min_value=0.01, value=0.01, step=0.01, key="holding_price_input")
+    holding_qty = st.number_input("买入数量 (股)", min_value=1, value=100, step=100, key="holding_qty_input")
+    
+    if st.button("✅ 添加持仓", key="add_holding_btn"):
+        if holding_code and holding_price > 0 and holding_qty > 0:
+            # 清理代码格式
+            clean_code = engine.clean_code(holding_code.strip())
+            # 检查是否已存在
+            existing = [h for h in st.session_state['holdings'] if h['code'] == clean_code]
+            if existing:
+                st.sidebar.warning(f"⚠️ {clean_code} 已存在，将更新持仓")
+                # 更新持仓
+                for h in st.session_state['holdings']:
+                    if h['code'] == clean_code:
+                        h['buy_price'] = holding_price
+                        h['quantity'] = holding_qty
+                        h['buy_date'] = datetime.datetime.now().strftime("%Y-%m-%d")
+            else:
+                # 添加新持仓
+                st.session_state['holdings'].append({
+                    'code': clean_code,
+                    'buy_price': holding_price,
+                    'quantity': holding_qty,
+                    'buy_date': datetime.datetime.now().strftime("%Y-%m-%d")
+                })
+            st.sidebar.success(f"✅ 已添加 {clean_code}")
+            st.rerun()
+
+# 显示持仓列表
+if st.session_state['holdings']:
+    st.sidebar.markdown("**持仓列表:**")
+    for i, holding in enumerate(st.session_state['holdings']):
+        col1, col2 = st.sidebar.columns([3, 1])
+        with col1:
+            st.sidebar.text(f"{holding['code']}")
+        with col2:
+            if st.sidebar.button("🗑️", key=f"del_{i}"):
+                st.session_state['holdings'].pop(i)
+                st.rerun()
+else:
+    st.sidebar.info("💡 暂无持仓，点击上方添加")
 
 # 导出Excel功能（放在sidebar中，确保显示）
 st.sidebar.markdown("---")
@@ -738,6 +805,99 @@ else:
 # 策略展示逻辑 (保持原样)
 with st.expander("📖 **策略逻辑白皮书**", expanded=False):
     for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
+
+# 持仓监控面板
+if st.session_state['holdings']:
+    st.markdown("---")
+    st.subheader("💼 我的持仓监控")
+    
+    holdings_data = []
+    total_profit = 0
+    total_cost = 0
+    
+    with st.spinner("正在获取持仓数据..."):
+        for holding in st.session_state['holdings']:
+            code = holding['code']
+            buy_price = holding['buy_price']
+            quantity = holding['quantity']
+            buy_date = holding.get('buy_date', '-')
+            
+            # 获取当前价格
+            current_price = engine.get_current_price(code)
+            if current_price:
+                profit = (current_price - buy_price) * quantity
+                profit_rate = ((current_price - buy_price) / buy_price) * 100
+                total_profit += profit
+                total_cost += buy_price * quantity
+                
+                # 获取股票名称
+                try:
+                    bs.login()
+                    rs_info = bs.query_stock_basic(code=code)
+                    stock_name = code
+                    if rs_info.next():
+                        stock_name = rs_info.get_row_data()[1]
+                    bs.logout()
+                except:
+                    stock_name = code
+                
+                # 判断卖出建议
+                sell_suggestion = "持有"
+                if profit_rate >= 10:
+                    sell_suggestion = "考虑止盈"
+                elif profit_rate <= -10:
+                    sell_suggestion = "建议止损"
+                elif profit_rate <= -5:
+                    sell_suggestion = "注意止损"
+                
+                holdings_data.append({
+                    '代码': code,
+                    '名称': stock_name,
+                    '买入价': f"{buy_price:.2f}",
+                    '当前价': f"{current_price:.2f}",
+                    '数量': quantity,
+                    '盈亏': f"{profit:.2f}",
+                    '盈亏率': f"{profit_rate:.2f}%",
+                    '买入日期': buy_date,
+                    '卖出建议': sell_suggestion
+                })
+            else:
+                holdings_data.append({
+                    '代码': code,
+                    '名称': code,
+                    '买入价': f"{buy_price:.2f}",
+                    '当前价': "获取中...",
+                    '数量': quantity,
+                    '盈亏': "-",
+                    '盈亏率': "-",
+                    '买入日期': buy_date,
+                    '卖出建议': "-"
+                })
+    
+    # 显示总盈亏
+    if total_cost > 0:
+        total_profit_rate = (total_profit / total_cost) * 100
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("总成本", f"¥{total_cost:,.2f}")
+        with col2:
+            st.metric("总盈亏", f"¥{total_profit:,.2f}", delta=f"{total_profit_rate:.2f}%")
+        with col3:
+            st.metric("持仓数量", len(st.session_state['holdings']))
+        with col4:
+            if total_profit > 0:
+                st.success("📈 整体盈利")
+            elif total_profit < 0:
+                st.error("📉 整体亏损")
+            else:
+                st.info("➡️ 盈亏平衡")
+    
+    # 显示持仓表格
+    if holdings_data:
+        df_holdings = pd.DataFrame(holdings_data)
+        st.dataframe(df_holdings, hide_index=True, use_container_width=True)
+    
+    st.markdown("---")
 
 if st.session_state['scan_res']:
     # 排序：priority >= 90的排在最前面，然后按priority降序
