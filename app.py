@@ -554,7 +554,12 @@ class QuantsEngine:
                 'stop_loss_price': buy_price * 0.90,
                 'take_profit_price': buy_price * 1.15,
                 'dynamic_stop_loss': None,
-                'dynamic_take_profit': None
+                'dynamic_take_profit': None,
+                'rsi': None,
+                'ma5': None,
+                'ma20': None,
+                'sell_signals_count': 0,
+                'buy_signals_count': 0
             }
     
     def get_deep_data(self, code):
@@ -1083,7 +1088,7 @@ if st.session_state['holdings']:
                 holdings_analysis[code] = analysis
                 
                 # 构建技术信号显示
-                signals_display = " | ".join(analysis['technical_signals']) if analysis['technical_signals'] else "无特殊信号"
+                signals_display = " | ".join(analysis.get('technical_signals', [])) if analysis.get('technical_signals') else "无特殊信号"
                 
                 holdings_data.append({
                     '代码': code,
@@ -1178,24 +1183,27 @@ if st.session_state['holdings']:
             with col1:
                 st.markdown("#### 📊 智能卖出建议")
                 # 根据建议类型显示不同颜色
-                if "强烈建议" in analysis['sell_suggestion'] or "建议止损" in analysis['sell_suggestion']:
-                    st.error(f"**{analysis['sell_suggestion']}**")
-                elif "考虑" in analysis['sell_suggestion'] or "建议" in analysis['sell_suggestion']:
-                    st.warning(f"**{analysis['sell_suggestion']}**")
+                sell_suggestion = analysis.get('sell_suggestion', '持有')
+                if "强烈建议" in sell_suggestion or "建议止损" in sell_suggestion:
+                    st.error(f"**{sell_suggestion}**")
+                elif "考虑" in sell_suggestion or "建议" in sell_suggestion:
+                    st.warning(f"**{sell_suggestion}**")
                 else:
-                    st.info(f"**{analysis['sell_suggestion']}**")
+                    st.info(f"**{sell_suggestion}**")
                 
-                st.markdown(f"**理由：** {analysis['suggestion_reason']}")
+                st.markdown(f"**理由：** {analysis.get('suggestion_reason', '暂无')}")
                 
                 st.markdown("#### ⚠️ 止盈止损建议")
-                st.markdown(f"**固定止损价：** ¥{analysis['stop_loss_price']:.2f} (-10%)")
-                st.markdown(f"**固定止盈价：** ¥{analysis['take_profit_price']:.2f} (+15%)")
+                if analysis.get('stop_loss_price'):
+                    st.markdown(f"**固定止损价：** ¥{analysis['stop_loss_price']:.2f} (-10%)")
+                if analysis.get('take_profit_price'):
+                    st.markdown(f"**固定止盈价：** ¥{analysis['take_profit_price']:.2f} (+15%)")
                 
-                if analysis['dynamic_stop_loss']:
+                if analysis.get('dynamic_stop_loss'):
                     st.markdown(f"**动态止损价：** ¥{analysis['dynamic_stop_loss']:.2f}")
                     st.caption("💡 动态止损会随价格上涨而上移，保护利润")
                 
-                if analysis['dynamic_take_profit']:
+                if analysis.get('dynamic_take_profit'):
                     st.markdown(f"**动态止盈价：** ¥{analysis['dynamic_take_profit']:.2f}")
                     st.caption("💡 动态止盈会随价格调整，锁定部分利润")
             
@@ -1212,12 +1220,12 @@ if st.session_state['holdings']:
                     st.metric("MA20", f"¥{analysis['ma20']:.2f}")
                 
                 st.markdown("#### 🎯 信号统计")
-                st.markdown(f"**卖出信号：** {analysis['sell_signals_count']} 个")
-                st.markdown(f"**买入信号：** {analysis['buy_signals_count']} 个")
-                st.markdown(f"**风险评级：** {analysis['risk_level']}")
+                st.markdown(f"**卖出信号：** {analysis.get('sell_signals_count', 0)} 个")
+                st.markdown(f"**买入信号：** {analysis.get('buy_signals_count', 0)} 个")
+                st.markdown(f"**风险评级：** {analysis.get('risk_level', '未知')}")
             
             # 显示技术信号详情
-            if analysis['technical_signals']:
+            if analysis.get('technical_signals'):
                 st.markdown("#### 🔔 技术信号详情")
                 for signal in analysis['technical_signals']:
                     if "⚠️" in signal:
