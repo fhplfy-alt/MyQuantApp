@@ -9,13 +9,18 @@ import os
 def check_password():
     if "password_correct" not in st.session_state:
         st.markdown("### 🔐 V45 智能量化系统安全验证")
-        pwd = st.text_input("请输入访问密码", type="password")
+        username = st.text_input("请输入用户名", placeholder="如: user001", key="login_username")
+        pwd = st.text_input("请输入访问密码", type="password", key="login_password")
         if st.button("登录"):
-            if pwd == "vip666888":
+            if pwd == "vip666888" and username.strip():
                 st.session_state["password_correct"] = True
+                st.session_state["username"] = username.strip()  # 保存用户名用于区分用户
                 st.rerun()
             else:
-                st.error("❌ 密码错误")
+                if not username.strip():
+                    st.error("❌ 请输入用户名")
+                else:
+                    st.error("❌ 密码错误")
         return False
     return True
 
@@ -895,29 +900,36 @@ if 'full_pool' not in st.session_state: st.session_state['full_pool'] = []
 if 'scan_res' not in st.session_state: st.session_state['scan_res'] = []
 if 'valid_options' not in st.session_state: st.session_state['valid_options'] = []
 
-# 持仓数据持久化存储
-HOLDINGS_FILE = "holdings_data.json"
+# 持仓数据持久化存储（按用户隔离）
+def get_holdings_file():
+    """根据当前用户名获取持仓文件路径"""
+    username = st.session_state.get("username", "default")
+    # 清理用户名中的特殊字符，避免文件名问题
+    safe_username = "".join(c for c in username if c.isalnum() or c in ('-', '_'))
+    return f"holdings_data_{safe_username}.json"
 
 def load_holdings():
-    """从文件加载持仓数据"""
+    """从文件加载当前用户的持仓数据"""
     try:
-        if os.path.exists(HOLDINGS_FILE):
-            with open(HOLDINGS_FILE, 'r', encoding='utf-8') as f:
+        holdings_file = get_holdings_file()
+        if os.path.exists(holdings_file):
+            with open(holdings_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
         pass  # 静默失败，不影响应用启动
     return []
 
 def save_holdings(holdings):
-    """保存持仓数据到文件"""
+    """保存当前用户的持仓数据到文件"""
     try:
-        with open(HOLDINGS_FILE, 'w', encoding='utf-8') as f:
+        holdings_file = get_holdings_file()
+        with open(holdings_file, 'w', encoding='utf-8') as f:
             json.dump(holdings, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
         return False
 
-# 初始化持仓数据（从文件加载）
+# 初始化持仓数据（从文件加载，每个用户独立）
 if 'holdings' not in st.session_state:
     st.session_state['holdings'] = load_holdings()
 
@@ -1139,7 +1151,39 @@ if st.session_state['holdings']:
     # 显示持仓表格
     if holdings_data:
         df_holdings = pd.DataFrame(holdings_data)
-        st.dataframe(df_holdings, hide_index=True, use_container_width=True)
+        # 配置持仓表格列提示信息
+        holdings_column_config = {
+            "代码": st.column_config.TextColumn("代码", help="股票代码"),
+            "名称": st.column_config.TextColumn("名称", help="股票名称"),
+            "买入价": st.column_config.TextColumn("买入价", help="买入时的价格（元）"),
+            "当前价": st.column_config.TextColumn("当前价", help="当前股票价格（元）"),
+            "数量": st.column_config.NumberColumn("数量", help="持有的股票数量（股）", format="%d"),
+            "盈亏": st.column_config.TextColumn("盈亏", help="盈亏金额（元），正数表示盈利，负数表示亏损"),
+            "盈亏率": st.column_config.TextColumn("盈亏率", help="盈亏百分比，正数表示盈利，负数表示亏损"),
+            "买入日期": st.column_config.TextColumn("买入日期", help="买入股票的日期"),
+            "卖出建议": st.column_config.TextColumn(
+                "卖出建议", 
+                help="""智能卖出建议（结合技术指标）：
+强烈建议止盈/止损: 盈利≥15%且出现多个卖出信号，或亏损≥10%且无买入信号
+考虑止盈/止损: 盈利≥10%或亏损≥5%，结合技术信号判断
+注意观察/止损: 出现卖出信号，需要密切关注
+持有: 技术指标正常，建议继续持有"""
+            ),
+            "技术信号": st.column_config.TextColumn(
+                "技术信号", 
+                help="""技术指标信号：
+⚠️ MA死叉: MA5下穿MA20，卖出信号
+⚠️ RSI超买: RSI>70，可能超买
+⚠️ KDJ死叉: K线下穿D线，卖出信号
+⚠️ 跌破MA20/MA5: 价格跌破均线，可能转弱
+✅ MA金叉: MA5上穿MA20，买入信号
+✅ RSI超卖: RSI<30，可能超卖反弹
+✅ 站上MA20: 价格站上均线，可能转强
+✅ 多头排列: 均线多头排列，趋势向上"""
+            ),
+            "风险评级": st.column_config.TextColumn("风险评级", help="风险评级：低 - 低风险，中 - 中等风险，高 - 高风险，未知 - 数据不足无法评级")
+        }
+        st.dataframe(df_holdings, hide_index=True, use_container_width=True, column_config=holdings_column_config)
     
     # 持仓股票深度分析
     st.markdown("### 🔍 持仓股票深度分析")
@@ -1328,7 +1372,41 @@ if st.session_state['scan_res']:
             alert_names += f"等{alert_count}只"
         st.success(f"🔥 **发现 {alert_count} 只【主力高控盘】标的：{alert_names}**")
     
-    st.dataframe(df_scan, hide_index=True)
+    # 配置列提示信息
+    column_config = {
+        "代码": st.column_config.TextColumn("代码", help="股票代码"),
+        "名称": st.column_config.TextColumn("名称", help="股票名称"),
+        "所属行业": st.column_config.TextColumn("所属行业", help="股票所属行业分类"),
+        "现价": st.column_config.NumberColumn("现价", help="当前股票价格（元）", format="%.2f"),
+        "涨跌": st.column_config.TextColumn("涨跌", help="涨跌幅百分比"),
+        "获利筹码": st.column_config.NumberColumn("获利筹码", help="获利筹码比例，表示当前价格下盈利的筹码占比（%）", format="%.2f"),
+        "风险评级": st.column_config.TextColumn("风险评级", help="风险评级：Low(安全) - 低风险，Med(破位) - 中等风险，High(高危) - 高风险"),
+        "策略信号": st.column_config.TextColumn(
+            "策略信号", 
+            help="""策略信号说明：
+👑 四星共振: [涨停+缺口+连阳+倍量] 同时满足，最强主升浪信号！
+🐲 妖股基因: 60天内3板 + 筹码>80%，游资龙头特征。
+🔥 换手锁仓: 连续高换手 + 高获利，主力清洗浮筹接力。
+🔴 温和吸筹: 3连阳但涨幅小 + 筹码集中，主力潜伏期。
+📈 多头排列: 股价收阳且重心上移，趋势健康，建议持有。
+💎 RSI超卖反弹: RSI<30后回升，超跌反弹机会。
+📊 布林带突破: 价格突破布林带上轨，强势突破信号。
+🎯 KDJ金叉: K线上穿D线，短期买入信号。
+📉 200日均线趋势: 价格站上200日均线，长期上升趋势。"""
+        ),
+        "综合评级": st.column_config.TextColumn(
+            "综合评级", 
+            help="""操作建议说明：
+🟥 STRONG BUY: 【重点关注】确定性极高
+🟧 BUY (博弈): 【激进买入】短线博弈
+🟨 BUY (低吸): 【稳健买入】逢低建仓
+🟦 HOLD: 【持股】趋势完好，拿住不动
+⬜ WAIT: 【观望】无机会"""
+        ),
+        "priority": st.column_config.NumberColumn("priority", help="优先级评分，数值越高表示信号越强（0-100）", format="%d")
+    }
+    
+    st.dataframe(df_scan, hide_index=True, column_config=column_config)
 
 # 深度分析 (增强版)
 if st.session_state['valid_options']:
