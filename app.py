@@ -1,5 +1,7 @@
 import streamlit as st
 from io import BytesIO
+import json
+import os
 
 # ==========================================
 # ⚠️ 1. 安全访问控制 (新功能)
@@ -887,7 +889,32 @@ engine = QuantsEngine()
 if 'full_pool' not in st.session_state: st.session_state['full_pool'] = []
 if 'scan_res' not in st.session_state: st.session_state['scan_res'] = []
 if 'valid_options' not in st.session_state: st.session_state['valid_options'] = []
-if 'holdings' not in st.session_state: st.session_state['holdings'] = []  # 持仓列表
+
+# 持仓数据持久化存储
+HOLDINGS_FILE = "holdings_data.json"
+
+def load_holdings():
+    """从文件加载持仓数据"""
+    try:
+        if os.path.exists(HOLDINGS_FILE):
+            with open(HOLDINGS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        pass  # 静默失败，不影响应用启动
+    return []
+
+def save_holdings(holdings):
+    """保存持仓数据到文件"""
+    try:
+        with open(HOLDINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(holdings, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        return False
+
+# 初始化持仓数据（从文件加载）
+if 'holdings' not in st.session_state:
+    st.session_state['holdings'] = load_holdings()
 
 st.sidebar.header("🕹️ 控制台")
 max_price_limit = st.sidebar.slider("💰 价格上限 (元)", 3.0, 100.0, 20.0)
@@ -944,7 +971,11 @@ with st.sidebar.expander("➕ 添加持仓", expanded=False):
                     'quantity': holding_qty,
                     'buy_date': datetime.datetime.now().strftime("%Y-%m-%d")
                 })
-            st.sidebar.success(f"✅ 已添加 {clean_code}")
+            # 保存到文件
+            if save_holdings(st.session_state['holdings']):
+                st.sidebar.success(f"✅ 已添加 {clean_code}（已保存）")
+            else:
+                st.sidebar.success(f"✅ 已添加 {clean_code}")
             st.rerun()
 
 # 显示持仓列表
@@ -957,6 +988,8 @@ if st.session_state['holdings']:
         with col2:
             if st.sidebar.button("🗑️", key=f"del_{i}"):
                 st.session_state['holdings'].pop(i)
+                # 保存到文件
+                save_holdings(st.session_state['holdings'])
                 st.rerun()
 else:
     st.sidebar.info("💡 暂无持仓，点击上方添加")
@@ -1124,8 +1157,6 @@ if st.session_state['holdings']:
     
     if holding_options:
         selected_holding = st.selectbox("选择要深度分析的持仓股票", holding_options, key="holding_analysis_select")
-    if holding_codes:
-        selected_holding = st.selectbox("选择要深度分析的持仓股票", holding_codes, key="holding_analysis_select")
         selected_code = selected_holding.split("|")[0].strip()
         
         # 找到对应的持仓信息
