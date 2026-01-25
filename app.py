@@ -352,6 +352,209 @@ class QuantsEngine:
         except:
             return None
     
+    def analyze_holding_stock(self, code, buy_price, current_price):
+        """分析持仓股票，结合技术指标给出智能卖出建议"""
+        try:
+            code = self.clean_code(code)
+            end = datetime.datetime.now().strftime("%Y-%m-%d")
+            start = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
+            
+            bs.login()
+            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
+            data = []
+            while rs.next(): data.append(rs.get_row_data())
+            bs.logout()
+            
+            if not data or len(data) < 60:
+                return {
+                    'sell_suggestion': '持有',
+                    'suggestion_reason': '数据不足',
+                    'technical_signals': [],
+                    'risk_level': '未知',
+                    'stop_loss_price': buy_price * 0.90,  # 默认止损-10%
+                    'take_profit_price': buy_price * 1.15,  # 默认止盈+15%
+                    'dynamic_stop_loss': None,
+                    'dynamic_take_profit': None
+                }
+            
+            df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"])
+            df = df.apply(pd.to_numeric, errors='coerce')
+            
+            curr = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) >= 2 else curr
+            
+            # 计算技术指标
+            df['MA5'] = df['close'].rolling(5).mean()
+            df['MA20'] = df['close'].rolling(20).mean()
+            df['MA200'] = df['close'].rolling(200).mean() if len(df) >= 200 else pd.Series([None] * len(df))
+            rsi = self.calc_rsi(df)
+            k, d, j = self.calc_kdj(df)
+            bb_upper, bb_mid, bb_lower = self.calc_bollinger(df)
+            
+            # 计算盈亏率
+            profit_rate = ((current_price - buy_price) / buy_price) * 100
+            
+            # 收集技术信号
+            technical_signals = []
+            sell_signals_count = 0
+            buy_signals_count = 0
+            
+            # 检测卖出信号
+            # 1. MA死叉
+            if len(df) >= 20:
+                if prev['MA5'] >= prev['MA20'] and curr['MA5'] < curr['MA20']:
+                    technical_signals.append("⚠️ MA死叉")
+                    sell_signals_count += 2
+            
+            # 2. RSI超买
+            if rsi is not None and rsi > 70:
+                technical_signals.append("⚠️ RSI超买")
+                sell_signals_count += 1
+            
+            # 3. KDJ死叉
+            if k is not None and d is not None and len(df) >= 2:
+                prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1])
+                if prev_k is not None and prev_d is not None:
+                    if prev_k >= prev_d and k < d:
+                        technical_signals.append("⚠️ KDJ死叉")
+                        sell_signals_count += 1
+            
+            # 4. 价格跌破MA20
+            if len(df) >= 20 and current_price < df['MA20'].iloc[-1]:
+                technical_signals.append("⚠️ 跌破MA20")
+                sell_signals_count += 1
+            
+            # 5. 价格跌破MA5
+            if len(df) >= 5 and current_price < df['MA5'].iloc[-1]:
+                technical_signals.append("⚠️ 跌破MA5")
+                sell_signals_count += 1
+            
+            # 检测买入/持有信号
+            # 1. MA金叉
+            if len(df) >= 20:
+                if prev['MA5'] <= prev['MA20'] and curr['MA5'] > curr['MA20']:
+                    technical_signals.append("✅ MA金叉")
+                    buy_signals_count += 2
+            
+            # 2. RSI超卖反弹
+            if rsi is not None and rsi < 30:
+                technical_signals.append("✅ RSI超卖")
+                buy_signals_count += 1
+            
+            # 3. 价格站上MA20
+            if len(df) >= 20 and current_price > df['MA20'].iloc[-1]:
+                technical_signals.append("✅ 站上MA20")
+                buy_signals_count += 1
+            
+            # 4. 多头排列
+            if len(df) >= 20 and df['MA5'].iloc[-1] > df['MA20'].iloc[-1]:
+                technical_signals.append("✅ 多头排列")
+                buy_signals_count += 1
+            
+            # 智能卖出建议逻辑
+            sell_suggestion = "持有"
+            suggestion_reason = ""
+            
+            # 结合盈亏率和技术信号
+            if profit_rate >= 15:
+                if sell_signals_count >= 2:
+                    sell_suggestion = "强烈建议止盈"
+                    suggestion_reason = f"盈利{profit_rate:.2f}%且出现{sell_signals_count}个卖出信号"
+                elif sell_signals_count >= 1:
+                    sell_suggestion = "考虑分批止盈"
+                    suggestion_reason = f"盈利{profit_rate:.2f}%且出现卖出信号，建议分批卖出"
+                else:
+                    sell_suggestion = "考虑止盈"
+                    suggestion_reason = f"盈利{profit_rate:.2f}%，可考虑获利了结"
+            elif profit_rate >= 10:
+                if sell_signals_count >= 2:
+                    sell_suggestion = "建议止盈"
+                    suggestion_reason = f"盈利{profit_rate:.2f}%且出现多个卖出信号"
+                elif sell_signals_count >= 1:
+                    sell_suggestion = "注意观察"
+                    suggestion_reason = f"盈利{profit_rate:.2f}%但出现卖出信号，注意风险"
+                else:
+                    sell_suggestion = "考虑止盈"
+                    suggestion_reason = f"盈利{profit_rate:.2f}%，可考虑止盈"
+            elif profit_rate <= -10:
+                if buy_signals_count >= 2:
+                    sell_suggestion = "可考虑持有"
+                    suggestion_reason = f"亏损{abs(profit_rate):.2f}%但出现买入信号，可考虑持有观察"
+                else:
+                    sell_suggestion = "强烈建议止损"
+                    suggestion_reason = f"亏损{abs(profit_rate):.2f}%且无买入信号，建议止损"
+            elif profit_rate <= -5:
+                if sell_signals_count >= 2:
+                    sell_suggestion = "建议止损"
+                    suggestion_reason = f"亏损{abs(profit_rate):.2f}%且出现卖出信号"
+                elif buy_signals_count >= 2:
+                    sell_suggestion = "可持有观察"
+                    suggestion_reason = f"亏损{abs(profit_rate):.2f}%但出现买入信号"
+                else:
+                    sell_suggestion = "注意止损"
+                    suggestion_reason = f"亏损{abs(profit_rate):.2f}%，注意止损"
+            else:
+                if sell_signals_count >= 3:
+                    sell_suggestion = "建议卖出"
+                    suggestion_reason = f"出现{sell_signals_count}个卖出信号，建议卖出"
+                elif buy_signals_count >= 2:
+                    sell_suggestion = "持有"
+                    suggestion_reason = f"出现买入信号，建议持有"
+                else:
+                    sell_suggestion = "持有"
+                    suggestion_reason = "技术指标正常，建议持有"
+            
+            # 动态止盈止损价格
+            # 动态止损：如果盈利，止损点随价格上涨而上移
+            dynamic_stop_loss = None
+            dynamic_take_profit = None
+            
+            if profit_rate > 0:
+                # 盈利时，止损点设为买入价的1.05倍（保本+5%）
+                dynamic_stop_loss = max(buy_price * 1.05, current_price * 0.95)
+                # 动态止盈：盈利15%以上时，止盈点设为当前价的0.92倍（保留8%利润）
+                if profit_rate >= 15:
+                    dynamic_take_profit = current_price * 0.92
+                elif profit_rate >= 10:
+                    dynamic_take_profit = current_price * 0.95
+            else:
+                # 亏损时，止损点设为买入价的0.90倍（-10%）
+                dynamic_stop_loss = buy_price * 0.90
+            
+            # 风险评级
+            risk_level = "低"
+            if sell_signals_count >= 3:
+                risk_level = "高"
+            elif sell_signals_count >= 1:
+                risk_level = "中"
+            
+            return {
+                'sell_suggestion': sell_suggestion,
+                'suggestion_reason': suggestion_reason,
+                'technical_signals': technical_signals,
+                'risk_level': risk_level,
+                'stop_loss_price': buy_price * 0.90,  # 固定止损-10%
+                'take_profit_price': buy_price * 1.15,  # 固定止盈+15%
+                'dynamic_stop_loss': dynamic_stop_loss,
+                'dynamic_take_profit': dynamic_take_profit,
+                'rsi': rsi,
+                'ma5': df['MA5'].iloc[-1] if len(df) >= 5 else None,
+                'ma20': df['MA20'].iloc[-1] if len(df) >= 20 else None,
+                'sell_signals_count': sell_signals_count,
+                'buy_signals_count': buy_signals_count
+            }
+        except Exception as e:
+            return {
+                'sell_suggestion': '持有',
+                'suggestion_reason': f'分析出错: {str(e)}',
+                'technical_signals': [],
+                'risk_level': '未知',
+                'stop_loss_price': buy_price * 0.90,
+                'take_profit_price': buy_price * 1.15,
+                'dynamic_stop_loss': None,
+                'dynamic_take_profit': None
+            }
+    
     def get_deep_data(self, code):
         """修复白屏的关键：增加严谨的数据校验"""
         try:
@@ -812,10 +1015,11 @@ if st.session_state['holdings']:
     st.subheader("💼 我的持仓监控")
     
     holdings_data = []
+    holdings_analysis = {}  # 存储每只股票的深度分析数据
     total_profit = 0
     total_cost = 0
     
-    with st.spinner("正在获取持仓数据..."):
+    with st.spinner("正在分析持仓数据..."):
         for holding in st.session_state['holdings']:
             code = holding['code']
             buy_price = holding['buy_price']
@@ -841,14 +1045,12 @@ if st.session_state['holdings']:
                 except:
                     stock_name = code
                 
-                # 判断卖出建议
-                sell_suggestion = "持有"
-                if profit_rate >= 10:
-                    sell_suggestion = "考虑止盈"
-                elif profit_rate <= -10:
-                    sell_suggestion = "建议止损"
-                elif profit_rate <= -5:
-                    sell_suggestion = "注意止损"
+                # 技术分析（结合技术指标）
+                analysis = engine.analyze_holding_stock(code, buy_price, current_price)
+                holdings_analysis[code] = analysis
+                
+                # 构建技术信号显示
+                signals_display = " | ".join(analysis['technical_signals']) if analysis['technical_signals'] else "无特殊信号"
                 
                 holdings_data.append({
                     '代码': code,
@@ -859,7 +1061,9 @@ if st.session_state['holdings']:
                     '盈亏': f"{profit:.2f}",
                     '盈亏率': f"{profit_rate:.2f}%",
                     '买入日期': buy_date,
-                    '卖出建议': sell_suggestion
+                    '卖出建议': analysis['sell_suggestion'],
+                    '技术信号': signals_display,
+                    '风险评级': analysis['risk_level']
                 })
             else:
                 holdings_data.append({
@@ -871,7 +1075,9 @@ if st.session_state['holdings']:
                     '盈亏': "-",
                     '盈亏率': "-",
                     '买入日期': buy_date,
-                    '卖出建议': "-"
+                    '卖出建议': "-",
+                    '技术信号': "-",
+                    '风险评级': "-"
                 })
     
     # 显示总盈亏
@@ -896,6 +1102,171 @@ if st.session_state['holdings']:
     if holdings_data:
         df_holdings = pd.DataFrame(holdings_data)
         st.dataframe(df_holdings, hide_index=True, use_container_width=True)
+    
+    # 持仓股票深度分析
+    st.markdown("### 🔍 持仓股票深度分析")
+    
+    # 选择要分析的股票 - 获取股票名称
+    holding_options = []
+    for h in st.session_state['holdings']:
+        code = h['code']
+        # 尝试获取股票名称
+        stock_name = code
+        try:
+            bs.login()
+            rs_info = bs.query_stock_basic(code=code)
+            if rs_info.next():
+                stock_name = rs_info.get_row_data()[1]
+            bs.logout()
+        except:
+            pass
+        holding_options.append(f"{code} | {stock_name}")
+    
+    if holding_options:
+        selected_holding = st.selectbox("选择要深度分析的持仓股票", holding_options, key="holding_analysis_select")
+    if holding_codes:
+        selected_holding = st.selectbox("选择要深度分析的持仓股票", holding_codes, key="holding_analysis_select")
+        selected_code = selected_holding.split("|")[0].strip()
+        
+        # 找到对应的持仓信息
+        selected_holding_info = None
+        for h in st.session_state['holdings']:
+            if h['code'] == selected_code:
+                selected_holding_info = h
+                break
+        
+        if selected_holding_info and selected_code in holdings_analysis:
+            analysis = holdings_analysis[selected_code]
+            current_price = engine.get_current_price(selected_code)
+            buy_price = selected_holding_info['buy_price']
+            profit_rate = ((current_price - buy_price) / buy_price) * 100 if current_price else 0
+            
+            # 显示分析结果
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📊 智能卖出建议")
+                # 根据建议类型显示不同颜色
+                if "强烈建议" in analysis['sell_suggestion'] or "建议止损" in analysis['sell_suggestion']:
+                    st.error(f"**{analysis['sell_suggestion']}**")
+                elif "考虑" in analysis['sell_suggestion'] or "建议" in analysis['sell_suggestion']:
+                    st.warning(f"**{analysis['sell_suggestion']}**")
+                else:
+                    st.info(f"**{analysis['sell_suggestion']}**")
+                
+                st.markdown(f"**理由：** {analysis['suggestion_reason']}")
+                
+                st.markdown("#### ⚠️ 止盈止损建议")
+                st.markdown(f"**固定止损价：** ¥{analysis['stop_loss_price']:.2f} (-10%)")
+                st.markdown(f"**固定止盈价：** ¥{analysis['take_profit_price']:.2f} (+15%)")
+                
+                if analysis['dynamic_stop_loss']:
+                    st.markdown(f"**动态止损价：** ¥{analysis['dynamic_stop_loss']:.2f}")
+                    st.caption("💡 动态止损会随价格上涨而上移，保护利润")
+                
+                if analysis['dynamic_take_profit']:
+                    st.markdown(f"**动态止盈价：** ¥{analysis['dynamic_take_profit']:.2f}")
+                    st.caption("💡 动态止盈会随价格调整，锁定部分利润")
+            
+            with col2:
+                st.markdown("#### 📈 技术指标")
+                if analysis.get('rsi'):
+                    rsi_status = "超买" if analysis['rsi'] > 70 else ("超卖" if analysis['rsi'] < 30 else "正常")
+                    st.metric("RSI", f"{analysis['rsi']:.2f}", delta=rsi_status)
+                
+                if analysis.get('ma5'):
+                    st.metric("MA5", f"¥{analysis['ma5']:.2f}")
+                
+                if analysis.get('ma20'):
+                    st.metric("MA20", f"¥{analysis['ma20']:.2f}")
+                
+                st.markdown("#### 🎯 信号统计")
+                st.markdown(f"**卖出信号：** {analysis['sell_signals_count']} 个")
+                st.markdown(f"**买入信号：** {analysis['buy_signals_count']} 个")
+                st.markdown(f"**风险评级：** {analysis['risk_level']}")
+            
+            # 显示技术信号详情
+            if analysis['technical_signals']:
+                st.markdown("#### 🔔 技术信号详情")
+                for signal in analysis['technical_signals']:
+                    if "⚠️" in signal:
+                        st.warning(signal)
+                    else:
+                        st.success(signal)
+            
+            # 深度分析：K线图
+            if st.button(f"📊 查看 {selected_code} 的K线图", key=f"kline_{selected_code}"):
+                with st.spinner("正在生成K线图..."):
+                    df = engine.get_deep_data(selected_code)
+                    if df is not None and not df.empty:
+                        stock_name = selected_holding_info.get('name', selected_code)
+                        try:
+                            bs.login()
+                            rs_info = bs.query_stock_basic(code=selected_code)
+                            if rs_info.next():
+                                stock_name = rs_info.get_row_data()[1]
+                            bs.logout()
+                        except:
+                            pass
+                        
+                        fig = engine.plot_professional_kline(df, f"{stock_name} - K线图（持仓分析）")
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # 在K线图上标注买入价
+                            st.info(f"💡 **买入价：¥{buy_price:.2f}** | **当前价：¥{current_price:.2f}** | **盈亏率：{profit_rate:.2f}%**")
+                    else:
+                        st.error("❌ 无法获取K线数据")
+            
+            # AI预测
+            if st.button(f"🤖 查看 {selected_code} 的AI预测", key=f"ai_{selected_code}"):
+                with st.spinner("正在生成AI预测..."):
+                    df = engine.get_deep_data(selected_code)
+                    if df is not None and not df.empty:
+                        future = engine.run_ai_prediction(df)
+                        if future:
+                            st.markdown("#### 🤖 AI预测：未来三天走势")
+                            col1, col2, col3 = st.columns(3)
+                            current_price_pred = future['current_price']
+                            
+                            with col1:
+                                st.metric("当前价格", f"¥{current_price_pred:.2f}")
+                            
+                            if future['color'] == 'green':
+                                st.success(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                            elif future['color'] == 'red':
+                                st.error(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                            else:
+                                st.warning(f"### {future['title']}\n{future['desc']}\n\n**{future['action']}**")
+                            
+                            # 显示后三天预测
+                            st.markdown("#### 📅 AI 时空推演 (未来3日)")
+                            pred_cols = st.columns(3)
+                            for i in range(3):
+                                pred_price = future['prices'][i]
+                                change = future['changes'][i]
+                                date_label = future['dates'][i]
+                                change_amount = pred_price - current_price_pred
+                                
+                                with pred_cols[i]:
+                                    if change > 0:
+                                        st.metric(
+                                            label=date_label,
+                                            value=f"¥{pred_price:.2f}",
+                                            delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                            delta_color="inverse"
+                                        )
+                                    else:
+                                        st.metric(
+                                            label=date_label,
+                                            value=f"¥{pred_price:.2f}",
+                                            delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                            delta_color="normal"
+                                        )
+                        else:
+                            st.warning("⚠️ AI预测数据不足")
+                    else:
+                        st.error("❌ 无法获取预测数据")
     
     st.markdown("---")
 
