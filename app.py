@@ -98,6 +98,22 @@ def check_password():
         
         with tab1:
             st.markdown("#### 用户登录")
+            
+            # 管理员快速登录选项
+            with st.expander("👨‍💼 管理员快速登录", expanded=False):
+                admin_pwd = st.text_input("管理员密码", type="password", placeholder="请输入管理员密码", key="admin_quick_login")
+                if st.button("管理员登录", key="admin_quick_btn", use_container_width=True):
+                    if admin_pwd == ADMIN_PASSWORD:
+                        st.session_state["password_correct"] = True
+                        st.session_state["username"] = "admin"  # 管理员用户名
+                        st.session_state["admin_logged_in"] = True  # 标记为管理员
+                        st.success("✅ 管理员登录成功")
+                        st.rerun()
+                    else:
+                        st.error("❌ 管理员密码错误")
+            
+            st.markdown("---")
+            st.markdown("#### 普通用户登录")
             username = st.text_input("用户名", placeholder="请输入用户名", key="login_username")
             pwd = st.text_input("密码", type="password", placeholder="请输入密码", key="login_password")
             
