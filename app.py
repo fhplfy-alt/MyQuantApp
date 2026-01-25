@@ -8,7 +8,10 @@ from datetime import datetime
 # ==========================================
 # ⚠️ 1. 用户管理系统 (注册+登录)
 # ==========================================
-USERS_FILE = "users.json"
+# 使用明确的数据目录，确保两个应用共享数据
+DATA_DIR = os.path.join(os.getcwd(), "data")
+os.makedirs(DATA_DIR, exist_ok=True)  # 确保数据目录存在
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
 def hash_password(password):
     """使用SHA256哈希密码"""
@@ -1012,7 +1015,7 @@ def get_holdings_file():
     username = st.session_state.get("username", "default")
     # 清理用户名中的特殊字符，避免文件名问题
     safe_username = "".join(c for c in username if c.isalnum() or c in ('-', '_'))
-    return f"holdings_data_{safe_username}.json"
+    return os.path.join(DATA_DIR, f"holdings_data_{safe_username}.json")
 
 def load_holdings():
     """从文件加载当前用户的持仓数据"""

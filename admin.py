@@ -10,7 +10,10 @@ import hashlib
 # 管理员配置
 # ==========================================
 ADMIN_PASSWORD = "admin2024"  # 管理员密码，建议修改为更安全的密码
-USERS_FILE = "users.json"
+# 使用明确的数据目录，确保与主应用共享数据
+DATA_DIR = os.path.join(os.getcwd(), "data")
+os.makedirs(DATA_DIR, exist_ok=True)  # 确保数据目录存在
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
 # ==========================================
 # 工具函数
@@ -42,7 +45,7 @@ def load_users():
 def get_holdings_file(username):
     """根据用户名获取持仓文件路径"""
     safe_username = "".join(c for c in username if c.isalnum() or c in ('-', '_'))
-    return f"holdings_data_{safe_username}.json"
+    return os.path.join(DATA_DIR, f"holdings_data_{safe_username}.json")
 
 def load_user_holdings(username):
     """加载指定用户的持仓数据"""
