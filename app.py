@@ -2,25 +2,131 @@ import streamlit as st
 from io import BytesIO
 import json
 import os
+import hashlib
+from datetime import datetime
 
 # ==========================================
-# ⚠️ 1. 安全访问控制 (新功能)
+# ⚠️ 1. 用户管理系统 (注册+登录)
 # ==========================================
+USERS_FILE = "users.json"
+
+def hash_password(password):
+    """使用SHA256哈希密码"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def load_users():
+    """加载用户数据"""
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        pass
+    return {}
+
+def save_users(users):
+    """保存用户数据"""
+    try:
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(users, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        return False
+
+def register_user(username, password):
+    """注册新用户"""
+    users = load_users()
+    username = username.strip()
+    
+    # 验证用户名
+    if not username:
+        return False, "用户名不能为空"
+    
+    # 检查用户名是否已存在
+    if username in users:
+        return False, "用户名已存在，请选择其他用户名"
+    
+    # 验证密码
+    if not password or len(password) < 4:
+        return False, "密码长度至少4位"
+    
+    # 保存用户信息
+    users[username] = {
+        "password_hash": hash_password(password),
+        "register_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    if save_users(users):
+        return True, "注册成功！"
+    else:
+        return False, "注册失败，请重试"
+
+def verify_user(username, password):
+    """验证用户登录"""
+    users = load_users()
+    username = username.strip()
+    
+    if not username or not password:
+        return False, "请输入用户名和密码"
+    
+    if username not in users:
+        return False, "用户名不存在，请先注册"
+    
+    stored_hash = users[username].get("password_hash", "")
+    input_hash = hash_password(password)
+    
+    if stored_hash == input_hash:
+        return True, "登录成功"
+    else:
+        return False, "密码错误"
+
 def check_password():
+    """登录/注册界面"""
     if "password_correct" not in st.session_state:
-        st.markdown("### 🔐 V45 智能量化系统安全验证")
-        username = st.text_input("请输入用户名", placeholder="如: user001", key="login_username")
-        pwd = st.text_input("请输入访问密码", type="password", key="login_password")
-        if st.button("登录"):
-            if pwd == "vip666888" and username.strip():
-                st.session_state["password_correct"] = True
-                st.session_state["username"] = username.strip()  # 保存用户名用于区分用户
-                st.rerun()
-            else:
-                if not username.strip():
-                    st.error("❌ 请输入用户名")
+        st.markdown("### 🔐 V45 智能量化系统")
+        
+        # 使用tabs切换注册和登录
+        tab1, tab2 = st.tabs(["🔑 登录", "📝 注册"])
+        
+        with tab1:
+            st.markdown("#### 用户登录")
+            username = st.text_input("用户名", placeholder="请输入用户名", key="login_username")
+            pwd = st.text_input("密码", type="password", placeholder="请输入密码", key="login_password")
+            
+            if st.button("登录", type="primary", use_container_width=True):
+                success, message = verify_user(username, pwd)
+                if success:
+                    st.session_state["password_correct"] = True
+                    st.session_state["username"] = username.strip()
+                    st.success(message)
+                    st.rerun()
                 else:
-                    st.error("❌ 密码错误")
+                    st.error(f"❌ {message}")
+        
+        with tab2:
+            st.markdown("#### 新用户注册")
+            reg_username = st.text_input("用户名", placeholder="请输入用户名（至少1位）", key="reg_username")
+            reg_password = st.text_input("密码", type="password", placeholder="请输入密码（至少4位）", key="reg_password")
+            reg_password_confirm = st.text_input("确认密码", type="password", placeholder="请再次输入密码", key="reg_password_confirm")
+            
+            if st.button("注册", type="primary", use_container_width=True):
+                # 验证输入
+                if not reg_username.strip():
+                    st.error("❌ 用户名不能为空")
+                elif not reg_password:
+                    st.error("❌ 密码不能为空")
+                elif len(reg_password) < 4:
+                    st.error("❌ 密码长度至少4位")
+                elif reg_password != reg_password_confirm:
+                    st.error("❌ 两次输入的密码不一致")
+                else:
+                    success, message = register_user(reg_username, reg_password)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.info("💡 请切换到【登录】标签页进行登录")
+                    else:
+                        st.error(f"❌ {message}")
+        
         return False
     return True
 
