@@ -525,17 +525,48 @@ class QuantsEngine:
         # 尝试从akshare获取实时价格（优先使用缓存）
         try:
             df_realtime = realtime_data_cache if realtime_data_cache is not None else ak.stock_zh_a_spot_em()
-            # akshare返回的代码格式可能不同，需要进行匹配
-            # 例如 'sh.600000' 对应 '600000'
-            target_code_ak = clean_code.replace('sh.', '').replace('sz.', '')
             
-            # 找到匹配的股票
+            # 增强代码匹配逻辑：支持多种格式匹配
+            # akshare返回的代码格式可能是 '600000'、'000001' 等6位数字字符串
+            # 需要处理多种可能的代码格式
+            
+            # 策略1: 去除前缀后的标准格式（如 'sh.600000' -> '600000'）
+            target_code_ak = clean_code.replace('sh.', '').replace('sz.', '').strip()
+            
+            # 策略2: 如果代码不是6位，尝试补齐前导零（如 '1' -> '000001'）
+            if len(target_code_ak) < 6 and target_code_ak.isdigit():
+                target_code_ak = target_code_ak.zfill(6)
+            
+            # 策略3: 如果代码超过6位，尝试截取后6位
+            if len(target_code_ak) > 6 and target_code_ak.isdigit():
+                target_code_ak = target_code_ak[-6:]
+            
+            # 首先尝试精确匹配（标准6位代码格式）
             current_price_row = df_realtime[df_realtime['代码'] == target_code_ak]
+            
+            # 如果精确匹配失败，尝试多种匹配方式
+            if current_price_row.empty and target_code_ak.isdigit():
+                # 策略A: 尝试去除前导零匹配（如 '000001' 匹配 '1'，但保留至少1位）
+                # 这用于处理akshare数据中可能存储的是去除前导零的格式
+                target_code_no_zero = target_code_ak.lstrip('0')
+                if target_code_no_zero and target_code_no_zero != target_code_ak and len(target_code_no_zero) >= 1:
+                    current_price_row = df_realtime[df_realtime['代码'] == target_code_no_zero]
+                
+                # 策略B: 尝试将代码列转换为字符串后精确匹配（处理可能的类型问题）
+                # 这用于处理代码列可能是数字类型或其他格式的情况
+                if current_price_row.empty:
+                    # 将代码列转换为字符串，去除可能的空格，不修改原始DataFrame
+                    mask = df_realtime['代码'].astype(str).str.strip() == target_code_ak
+                    if mask.any():
+                        current_price_row = df_realtime[mask]
+            
+            # 如果找到匹配的股票，返回实时价格
             if not current_price_row.empty:
                 realtime_price = float(current_price_row.iloc[0]['最新价'])
                 return realtime_price
-        except:
-            pass # 静默失败，继续尝试Baostock
+        except Exception as e:
+            # 静默失败，继续尝试Baostock（保持原有行为）
+            pass
         
         # 如果akshare失败，或者未找到数据，则回退到Baostock获取最新收盘价
         # 注意：在扫描过程中（realtime_data_cache不为None），如果akshare失败，直接返回None
