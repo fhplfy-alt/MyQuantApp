@@ -526,6 +526,29 @@ class QuantsEngine:
         try:
             df_realtime = realtime_data_cache if realtime_data_cache is not None else ak.stock_zh_a_spot_em()
             
+            # 检查DataFrame是否为空
+            if df_realtime is None or df_realtime.empty:
+                raise ValueError("akshare返回的数据为空")
+            
+            # 自动检测代码列和价格列的列名（支持多种可能的列名格式）
+            # 代码列可能的列名：'代码'、'code'、'股票代码'、'stock_code'等
+            code_column = None
+            for possible_code_col in ['代码', 'code', '股票代码', 'stock_code', '证券代码', 'symbol']:
+                if possible_code_col in df_realtime.columns:
+                    code_column = possible_code_col
+                    break
+            
+            # 价格列可能的列名：'最新价'、'current_price'、'现价'、'price'、'最新'等
+            price_column = None
+            for possible_price_col in ['最新价', 'current_price', '现价', 'price', '最新', 'current', '最新价格']:
+                if possible_price_col in df_realtime.columns:
+                    price_column = possible_price_col
+                    break
+            
+            # 如果找不到必要的列，抛出异常
+            if code_column is None or price_column is None:
+                raise ValueError(f"无法找到必要的列：代码列={code_column}, 价格列={price_column}, 可用列={list(df_realtime.columns)}")
+            
             # 增强代码匹配逻辑：支持多种格式匹配
             # akshare返回的代码格式可能是 '600000'、'000001' 等6位数字字符串
             # 需要处理多种可能的代码格式
@@ -542,7 +565,8 @@ class QuantsEngine:
                 target_code_ak = target_code_ak[-6:]
             
             # 首先尝试精确匹配（标准6位代码格式）
-            current_price_row = df_realtime[df_realtime['代码'] == target_code_ak]
+            # 将代码列转换为字符串进行匹配，处理可能的类型问题
+            current_price_row = df_realtime[df_realtime[code_column].astype(str).str.strip() == target_code_ak]
             
             # 如果精确匹配失败，尝试多种匹配方式
             if current_price_row.empty and target_code_ak.isdigit():
@@ -550,22 +574,26 @@ class QuantsEngine:
                 # 这用于处理akshare数据中可能存储的是去除前导零的格式
                 target_code_no_zero = target_code_ak.lstrip('0')
                 if target_code_no_zero and target_code_no_zero != target_code_ak and len(target_code_no_zero) >= 1:
-                    current_price_row = df_realtime[df_realtime['代码'] == target_code_no_zero]
+                    current_price_row = df_realtime[df_realtime[code_column].astype(str).str.strip() == target_code_no_zero]
                 
-                # 策略B: 尝试将代码列转换为字符串后精确匹配（处理可能的类型问题）
-                # 这用于处理代码列可能是数字类型或其他格式的情况
+                # 策略B: 尝试包含匹配（处理代码列可能包含前缀的情况，如'sh600959'）
                 if current_price_row.empty:
-                    # 将代码列转换为字符串，去除可能的空格，不修改原始DataFrame
-                    mask = df_realtime['代码'].astype(str).str.strip() == target_code_ak
+                    # 检查代码列是否包含目标代码（去除前缀后）
+                    mask = df_realtime[code_column].astype(str).str.replace('sh', '').str.replace('sz', '').str.replace('.', '').str.strip() == target_code_ak
                     if mask.any():
                         current_price_row = df_realtime[mask]
             
             # 如果找到匹配的股票，返回实时价格
             if not current_price_row.empty:
-                realtime_price = float(current_price_row.iloc[0]['最新价'])
-                return realtime_price
+                try:
+                    realtime_price = float(current_price_row.iloc[0][price_column])
+                    return realtime_price
+                except (ValueError, KeyError, IndexError) as e:
+                    # 如果价格列转换失败，继续尝试其他方法
+                    raise ValueError(f"无法从价格列获取价格：{e}")
         except Exception as e:
             # 静默失败，继续尝试Baostock（保持原有行为）
+            # 注意：这里不打印错误信息，保持静默失败机制，避免影响扫描性能
             pass
         
         # 如果akshare失败，或者未找到数据，则回退到Baostock获取最新收盘价
