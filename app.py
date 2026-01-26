@@ -441,14 +441,17 @@ class QuantsEngine:
         # 在返回结果前，获取实时价格更新"现价"字段（保持策略判断逻辑不变）
         # 使用try-except确保即使获取实时价格失败，也不影响扫描流程
         display_price = curr['close']  # 默认使用历史收盘价
-        try:
-            current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache)
-            # 如果获取实时价格成功，使用实时价格
-            if current_realtime_price is not None:
-                display_price = current_realtime_price
-        except Exception as e:
-            # 静默处理异常，使用历史收盘价作为备用，不影响扫描
-            pass
+        
+        # 只有在有实时数据缓存时才尝试获取实时价格，避免阻塞扫描
+        if realtime_data_cache is not None:
+            try:
+                current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache)
+                # 如果获取实时价格成功，使用实时价格
+                if current_realtime_price is not None:
+                    display_price = current_realtime_price
+            except:
+                # 静默处理异常，使用历史收盘价作为备用，不影响扫描
+                pass
 
         return {
             "result": {
@@ -469,11 +472,13 @@ class QuantsEngine:
         progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total}) | 命中: 0 只")
         
         # 在扫描开始时，尝试获取一次实时行情数据（用于优化扫描过程中的价格获取）
+        # 如果获取失败或超时，继续使用历史数据，不影响扫描流程
         realtime_data_cache = None
         try:
             realtime_data_cache = ak.stock_zh_a_spot_em()
         except:
-            pass  # 如果获取失败，继续使用历史数据
+            # 如果获取失败，继续使用历史数据，不影响扫描
+            pass
         
         # 根据总数决定更新频率
         if total <= 100:
@@ -516,7 +521,6 @@ class QuantsEngine:
             realtime_data_cache: 可选的实时行情数据缓存（DataFrame），用于优化扫描性能
         """
         clean_code = self.clean_code(code)
-        print(f"DEBUG: get_current_price for code: {code}, cleaned code: {clean_code}")
         
         # 尝试从akshare获取实时价格（优先使用缓存）
         try:
@@ -524,18 +528,13 @@ class QuantsEngine:
             # akshare返回的代码格式可能不同，需要进行匹配
             # 例如 'sh.600000' 对应 '600000'
             target_code_ak = clean_code.replace('sh.', '').replace('sz.', '')
-            print(f"DEBUG: akshare target_code_ak: {target_code_ak}")
             
             # 找到匹配的股票
             current_price_row = df_realtime[df_realtime['代码'] == target_code_ak]
             if not current_price_row.empty:
                 realtime_price = float(current_price_row.iloc[0]['最新价'])
-                print(f"DEBUG: akshare found realtime price: {realtime_price}")
                 return realtime_price
-            else:
-                print(f"DEBUG: akshare did not find code {target_code_ak} in realtime data.")
-        except Exception as e:
-            print(f"DEBUG: Akshare获取实时行情失败: {e}")
+        except:
             pass # 静默失败，继续尝试Baostock
         
         # 如果akshare失败，或者未找到数据，则回退到Baostock获取最新收盘价
@@ -543,31 +542,28 @@ class QuantsEngine:
         # 因为扫描过程中baostock已经被使用，避免重复登录冲突
         if realtime_data_cache is not None:
             # 扫描过程中，akshare失败就直接返回None，使用历史收盘价
-            print(f"DEBUG: In scan mode, akshare failed, returning None to use historical close price")
             return None
         
-        print(f"DEBUG: Falling back to Baostock for historical close price for code: {clean_code}")
         try:
             bs.login()
             end = datetime.datetime.now().strftime("%Y-%m-%d")
             # 尝试获取当天数据，如果失败则回溯几天
             for i in range(5):
                 start = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-                print(f"DEBUG: Baostock query for {clean_code}, start: {start}, end: {end}")
                 rs = bs.query_history_k_data_plus(clean_code, "date,close", start_date=start, end_date=end, frequency="d", adjustflag="3")
                 data = []
                 while rs.next(): data.append(rs.get_row_data())
                 if data:
                     baostock_price = float(data[-1][1])
-                    print(f"DEBUG: Baostock found historical price: {baostock_price}")
                     bs.logout()
                     return baostock_price  # 返回最新收盘价
             bs.logout()
-            print(f"DEBUG: Baostock did not find historical price for code: {clean_code}")
             return None
-        except Exception as e:
-            bs.logout()
-            print(f"DEBUG: Baostock获取历史数据失败: {e}")
+        except:
+            try:
+                bs.logout()
+            except:
+                pass
             return None
     
     def analyze_holding_stock(self, code, buy_price, current_price):
