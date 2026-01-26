@@ -330,7 +330,7 @@ class QuantsEngine:
         except:
             return None, None, None
 
-    def _process_single_stock(self, code, max_price=None):
+    def _process_single_stock(self, code, max_price=None, realtime_data_cache=None):
         # 保持你原始的策略判定逻辑不变
         code = self.clean_code(code)
         end = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -439,9 +439,16 @@ class QuantsEngine:
         if priority == 0: return None
 
         # 在返回结果前，获取实时价格更新"现价"字段（保持策略判断逻辑不变）
-        current_realtime_price = self.get_current_price(code)
-        # 如果获取实时价格失败，使用历史收盘价作为备用
-        display_price = current_realtime_price if current_realtime_price is not None else curr['close']
+        # 使用try-except确保即使获取实时价格失败，也不影响扫描流程
+        display_price = curr['close']  # 默认使用历史收盘价
+        try:
+            current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache)
+            # 如果获取实时价格成功，使用实时价格
+            if current_realtime_price is not None:
+                display_price = current_realtime_price
+        except Exception as e:
+            # 静默处理异常，使用历史收盘价作为备用，不影响扫描
+            pass
 
         return {
             "result": {
@@ -461,6 +468,13 @@ class QuantsEngine:
         total = len(code_list)
         progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total}) | 命中: 0 只")
         
+        # 在扫描开始时，尝试获取一次实时行情数据（用于优化扫描过程中的价格获取）
+        realtime_data_cache = None
+        try:
+            realtime_data_cache = ak.stock_zh_a_spot_em()
+        except:
+            pass  # 如果获取失败，继续使用历史数据
+        
         # 根据总数决定更新频率
         if total <= 100:
             update_interval = 1  # 少于100个，每个都更新
@@ -471,7 +485,7 @@ class QuantsEngine:
         
         for i, code in enumerate(code_list):
             try:
-                res = self._process_single_stock(code, max_price)
+                res = self._process_single_stock(code, max_price, realtime_data_cache=realtime_data_cache)
                 if res:
                     results.append(res["result"])
                     if res["alert"]: alerts.append(res["alert"])
@@ -494,14 +508,19 @@ class QuantsEngine:
         progress_bar.empty()
         return results, alerts, valid_codes_list
 
-    def get_current_price(self, code):
-        """获取股票当前价格 (优先使用实时行情)"""
+    def get_current_price(self, code, realtime_data_cache=None):
+        """获取股票当前价格 (优先使用实时行情)
+        
+        Args:
+            code: 股票代码
+            realtime_data_cache: 可选的实时行情数据缓存（DataFrame），用于优化扫描性能
+        """
         clean_code = self.clean_code(code)
         print(f"DEBUG: get_current_price for code: {code}, cleaned code: {clean_code}")
         
-        # 尝试从akshare获取实时价格
+        # 尝试从akshare获取实时价格（优先使用缓存）
         try:
-            df_realtime = ak.stock_zh_a_spot_em()
+            df_realtime = realtime_data_cache if realtime_data_cache is not None else ak.stock_zh_a_spot_em()
             # akshare返回的代码格式可能不同，需要进行匹配
             # 例如 'sh.600000' 对应 '600000'
             target_code_ak = clean_code.replace('sh.', '').replace('sz.', '')
@@ -520,6 +539,13 @@ class QuantsEngine:
             pass # 静默失败，继续尝试Baostock
         
         # 如果akshare失败，或者未找到数据，则回退到Baostock获取最新收盘价
+        # 注意：在扫描过程中（realtime_data_cache不为None），如果akshare失败，直接返回None
+        # 因为扫描过程中baostock已经被使用，避免重复登录冲突
+        if realtime_data_cache is not None:
+            # 扫描过程中，akshare失败就直接返回None，使用历史收盘价
+            print(f"DEBUG: In scan mode, akshare failed, returning None to use historical close price")
+            return None
+        
         print(f"DEBUG: Falling back to Baostock for historical close price for code: {clean_code}")
         try:
             bs.login()
