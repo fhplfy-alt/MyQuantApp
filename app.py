@@ -442,16 +442,16 @@ class QuantsEngine:
         # 使用try-except确保即使获取实时价格失败，也不影响扫描流程
         display_price = curr['close']  # 默认使用历史收盘价
         
-        # 只有在有实时数据缓存时才尝试获取实时价格，避免阻塞扫描
-        if realtime_data_cache is not None:
-            try:
-                current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache)
-                # 如果获取实时价格成功，使用实时价格
-                if current_realtime_price is not None:
-                    display_price = current_realtime_price
-            except:
-                # 静默处理异常，使用历史收盘价作为备用，不影响扫描
-                pass
+        # 尝试获取实时价格（优先使用akshare，失败则使用Baostock最新收盘价）
+        # 在扫描过程中，baostock已经登录，可以直接使用
+        try:
+            current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache, bs_already_logged_in=True)
+            # 如果获取实时价格成功，使用实时价格
+            if current_realtime_price is not None and current_realtime_price > 0:
+                display_price = current_realtime_price
+        except:
+            # 静默处理异常，使用历史收盘价作为备用，不影响扫描
+            pass
 
         return {
             "result": {
@@ -513,12 +513,13 @@ class QuantsEngine:
         progress_bar.empty()
         return results, alerts, valid_codes_list
 
-    def get_current_price(self, code, realtime_data_cache=None):
+    def get_current_price(self, code, realtime_data_cache=None, bs_already_logged_in=False):
         """获取股票当前价格 (优先使用实时行情)
         
         Args:
             code: 股票代码
             realtime_data_cache: 可选的实时行情数据缓存（DataFrame），用于优化扫描性能
+            bs_already_logged_in: Baostock是否已经登录（扫描过程中为True，避免重复登录）
         """
         clean_code = self.clean_code(code)
         
@@ -566,7 +567,8 @@ class QuantsEngine:
             
             # 首先尝试精确匹配（标准6位代码格式）
             # 将代码列转换为字符串进行匹配，处理可能的类型问题
-            current_price_row = df_realtime[df_realtime[code_column].astype(str).str.strip() == target_code_ak]
+            code_series = df_realtime[code_column].astype(str).str.strip()
+            current_price_row = df_realtime[code_series == target_code_ak]
             
             # 如果精确匹配失败，尝试多种匹配方式
             if current_price_row.empty and target_code_ak.isdigit():
@@ -574,37 +576,49 @@ class QuantsEngine:
                 # 这用于处理akshare数据中可能存储的是去除前导零的格式
                 target_code_no_zero = target_code_ak.lstrip('0')
                 if target_code_no_zero and target_code_no_zero != target_code_ak and len(target_code_no_zero) >= 1:
-                    current_price_row = df_realtime[df_realtime[code_column].astype(str).str.strip() == target_code_no_zero]
+                    current_price_row = df_realtime[code_series == target_code_no_zero]
                 
                 # 策略B: 尝试包含匹配（处理代码列可能包含前缀的情况，如'sh600959'）
                 if current_price_row.empty:
                     # 检查代码列是否包含目标代码（去除前缀后）
-                    mask = df_realtime[code_column].astype(str).str.replace('sh', '').str.replace('sz', '').str.replace('.', '').str.strip() == target_code_ak
+                    code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
+                    mask = code_normalized == target_code_ak
                     if mask.any():
                         current_price_row = df_realtime[mask]
+                
+                # 策略C: 尝试反向匹配（处理代码列可能是完整格式如'sh.600959'的情况）
+                if current_price_row.empty:
+                    # 尝试匹配完整格式（带前缀）
+                    mask = code_series == clean_code
+                    if mask.any():
+                        current_price_row = df_realtime[mask]
+                    elif code_series.str.contains(target_code_ak, na=False).any():
+                        # 如果包含目标代码，取第一个匹配的
+                        mask = code_series.str.contains(target_code_ak, na=False)
+                        if mask.any():
+                            current_price_row = df_realtime[mask].iloc[[0]]
             
             # 如果找到匹配的股票，返回实时价格
             if not current_price_row.empty:
                 try:
                     realtime_price = float(current_price_row.iloc[0][price_column])
-                    return realtime_price
+                    # 验证价格是否合理（大于0）
+                    if realtime_price > 0:
+                        return realtime_price
                 except (ValueError, KeyError, IndexError) as e:
                     # 如果价格列转换失败，继续尝试其他方法
-                    raise ValueError(f"无法从价格列获取价格：{e}")
+                    pass
         except Exception as e:
             # 静默失败，继续尝试Baostock（保持原有行为）
             # 注意：这里不打印错误信息，保持静默失败机制，避免影响扫描性能
             pass
         
         # 如果akshare失败，或者未找到数据，则回退到Baostock获取最新收盘价
-        # 注意：在扫描过程中（realtime_data_cache不为None），如果akshare失败，直接返回None
-        # 因为扫描过程中baostock已经被使用，避免重复登录冲突
-        if realtime_data_cache is not None:
-            # 扫描过程中，akshare失败就直接返回None，使用历史收盘价
-            return None
-        
+        # 在扫描过程中（bs_already_logged_in为True），直接使用已登录的baostock，避免重复登录
         try:
-            bs.login()
+            if not bs_already_logged_in:
+                bs.login()
+            
             end = datetime.datetime.now().strftime("%Y-%m-%d")
             # 尝试获取当天数据，如果失败则回溯几天
             for i in range(5):
@@ -614,15 +628,19 @@ class QuantsEngine:
                 while rs.next(): data.append(rs.get_row_data())
                 if data:
                     baostock_price = float(data[-1][1])
-                    bs.logout()
+                    if not bs_already_logged_in:
+                        bs.logout()
                     return baostock_price  # 返回最新收盘价
-            bs.logout()
+            
+            if not bs_already_logged_in:
+                bs.logout()
             return None
         except:
-            try:
-                bs.logout()
-            except:
-                pass
+            if not bs_already_logged_in:
+                try:
+                    bs.logout()
+                except:
+                    pass
             return None
     
     def analyze_holding_stock(self, code, buy_price, current_price):
