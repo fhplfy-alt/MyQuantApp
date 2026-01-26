@@ -438,10 +438,15 @@ class QuantsEngine:
 
         if priority == 0: return None
 
+        # 在返回结果前，获取实时价格更新"现价"字段（保持策略判断逻辑不变）
+        current_realtime_price = self.get_current_price(code)
+        # 如果获取实时价格失败，使用历史收盘价作为备用
+        display_price = current_realtime_price if current_realtime_price is not None else curr['close']
+
         return {
             "result": {
                 "代码": code, "名称": info['name'], "所属行业": info['industry'],
-                "现价": curr['close'], "涨跌": f"{curr['pctChg']:.2f}%", 
+                "现价": display_price, "涨跌": f"{curr['pctChg']:.2f}%", 
                 "获利筹码": winner_rate, "风险评级": risk_level,
                 "策略信号": " + ".join(signal_tags), "综合评级": action, "priority": priority
             },
