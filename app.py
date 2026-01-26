@@ -181,6 +181,7 @@ try:
     import numpy as np
     import time
     import datetime
+    import akshare as ak # 导入akshare用于获取实时行情
     from sklearn.linear_model import LinearRegression
 except ImportError as e:
     st.error(f"❌ 启动失败！缺少必要运行库: {e}")
@@ -489,20 +490,43 @@ class QuantsEngine:
         return results, alerts, valid_codes_list
 
     def get_current_price(self, code):
-        """获取股票当前价格"""
+        """获取股票当前价格 (优先使用实时行情)"""
+        clean_code = self.clean_code(code)
+        
+        # 尝试从akshare获取实时价格
+        try:
+            df_realtime = ak.stock_zh_a_spot_em()
+            # akshare返回的代码格式可能不同，需要进行匹配
+            # 例如 'sh.600000' 对应 '600000'
+            target_code_ak = clean_code.replace('sh.', '').replace('sz.', '')
+            
+            # 找到匹配的股票
+            current_price_row = df_realtime[df_realtime['代码'] == target_code_ak]
+            if not current_price_row.empty:
+                # 返回最新价
+                return float(current_price_row.iloc[0]['最新价'])
+        except Exception as e:
+            # st.warning(f"Akshare获取实时行情失败，尝试使用Baostock历史数据: {e}")
+            pass # 静默失败，继续尝试Baostock
+        
+        # 如果akshare失败，或者未找到数据，则回退到Baostock获取最新收盘价
         try:
             bs.login()
-            code = self.clean_code(code)
             end = datetime.datetime.now().strftime("%Y-%m-%d")
-            start = (datetime.datetime.now() - datetime.timedelta(days=5)).strftime("%Y-%m-%d")
-            rs = bs.query_history_k_data_plus(code, "date,close", start_date=start, end_date=end, frequency="d", adjustflag="3")
-            data = []
-            while rs.next(): data.append(rs.get_row_data())
+            # 尝试获取当天数据，如果失败则回溯几天
+            for i in range(5):
+                start = (datetime.datetime.now() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+                rs = bs.query_history_k_data_plus(clean_code, "date,close", start_date=start, end_date=end, frequency="d", adjustflag="3")
+                data = []
+                while rs.next(): data.append(rs.get_row_data())
+                if data:
+                    bs.logout()
+                    return float(data[-1][1])  # 返回最新收盘价
             bs.logout()
-            if data:
-                return float(data[-1][1])  # 返回最新收盘价
             return None
-        except:
+        except Exception as e:
+            bs.logout()
+            # st.error(f"Baostock获取历史数据失败: {e}")
             return None
     
     def analyze_holding_stock(self, code, buy_price, current_price):
