@@ -343,9 +343,10 @@ class QuantsEngine:
     def _process_single_stock(self, code, max_price=None, realtime_data_cache=None, price_map=None):
         """处理单只股票的策略分析
         
-        优化说明：
+        性能优化说明：
         1. 支持价格映射表，避免重复匹配
-        2. 保持原有策略判定逻辑不变
+        2. 提前使用实时价格过滤，减少不必要的baostock查询
+        3. 保持原有策略判定逻辑不变
         
         Args:
             code: 股票代码
@@ -353,8 +354,15 @@ class QuantsEngine:
             realtime_data_cache: 实时行情数据缓存
             price_map: 代码到价格的映射表（可选，用于优化性能）
         """
-        # 保持你原始的策略判定逻辑不变
+        # 性能优化：提前使用实时价格过滤，避免不必要的baostock查询
         code = self.clean_code(code)
+        
+        # 如果有价格映射表且设置了价格上限，先检查实时价格
+        if max_price is not None and price_map is not None and code in price_map:
+            cached_price = price_map[code]
+            if cached_price is not None and cached_price > max_price:
+                return None  # 提前过滤，避免后续查询
+        
         end = datetime.datetime.now().strftime("%Y-%m-%d")
         start = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
         
@@ -362,26 +370,45 @@ class QuantsEngine:
         info = {'name': code, 'industry': '-', 'ipoDate': '2000-01-01'}
         
         try:
+            # 优化：合并查询，减少网络IO（先获取历史数据，再获取基本信息）
+            # 先获取历史数据（最重要的，用于策略判断）
+            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
+            while rs.next(): data.append(rs.get_row_data())
+            
+            # 如果历史数据不足，提前返回，避免后续查询
+            if not data or len(data) < 60:
+                return None
+            
+            # 从历史数据中获取最新收盘价，提前检查价格限制（性能优化）
+            if max_price is not None and data:
+                try:
+                    last_close = float(data[-1][2])  # close是第3列（索引2）
+                    if last_close > max_price:
+                        return None  # 提前过滤，避免后续查询
+                except (ValueError, IndexError):
+                    pass  # 如果转换失败，继续后续处理
+            
+            # 再获取基本信息和行业信息（用于显示）
             rs_info = bs.query_stock_basic(code=code)
             if rs_info.next():
                 row = rs_info.get_row_data()
                 info['name'] = row[1]
                 info['ipoDate'] = row[2]
+            
             rs_ind = bs.query_stock_industry(code)
             if rs_ind.next(): info['industry'] = rs_ind.get_row_data()[3] 
+            
             if not self.is_valid(code, info['name']): return None
-            rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume,pctChg,turn", start_date=start, frequency="d", adjustflag="3")
-            while rs.next(): data.append(rs.get_row_data())
         except: return None
 
-        if not data: return None
+        # 数据已在上面处理，这里直接使用
         df = pd.DataFrame(data, columns=["date", "open", "close", "high", "low", "volume", "pctChg", "turn"])
         df = df.apply(pd.to_numeric, errors='coerce')
-        if len(df) < 60: return None
+        # len(df) < 60 的检查已在上面完成
 
         curr = df.iloc[-1]
         prev = df.iloc[-2]
-        if max_price is not None and curr['close'] > max_price: return None
+        # max_price检查已在上面完成
 
         winner_rate = self.calc_winner_rate(df, curr['close'])
         df['MA5'] = df['close'].rolling(5).mean()
@@ -476,18 +503,19 @@ class QuantsEngine:
                 # 如果价格差异过大，继续尝试其他方法
         
         # 策略2：如果映射表中没有，或价格异常，则调用get_current_price获取实时价格
-        if display_price == curr['close']:  # 说明映射表未命中或价格异常
-            try:
-                current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache, bs_already_logged_in=True)
-                # 如果获取实时价格成功，使用实时价格
-                if current_realtime_price is not None and current_realtime_price > 0:
+        # 性能优化：只在映射表未命中时才尝试，减少不必要的网络请求
+        if display_price == curr['close'] and (price_map is None or code not in price_map):
+        try:
+            current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache, bs_already_logged_in=True)
+            # 如果获取实时价格成功，使用实时价格
+            if current_realtime_price is not None and current_realtime_price > 0:
                     # 再次验证价格合理性
                     price_diff_ratio = abs(current_realtime_price - curr['close']) / curr['close'] if curr['close'] > 0 else 1.0
                     if price_diff_ratio <= 0.20:  # 允许20%的价格波动
-                        display_price = current_realtime_price
-            except:
-                # 静默处理异常，使用历史收盘价作为备用，不影响扫描
-                pass
+                display_price = current_realtime_price
+        except:
+            # 静默处理异常，使用历史收盘价作为备用，不影响扫描
+            pass
 
         return {
             "result": {
@@ -530,31 +558,50 @@ class QuantsEngine:
                     code_series = realtime_data_cache[code_column].astype(str).str.strip()
                     code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
                     
-                    # 为每个待扫描代码建立映射（优化：批量处理，提高效率）
-                    # 使用字典加速查找，避免重复计算 code_normalized
-                    normalized_map = {}  # 存储已标准化的代码，避免重复计算
+                    # 性能优化：使用pandas向量化操作批量建立映射，大幅提升速度
+                    # 为所有待扫描代码预处理标准化格式
+                    code_mapping = {}  # 存储原始代码到标准化代码的映射
+                    target_codes_set = set()  # 用于批量匹配
                     
                     for code in code_list:
                         clean_code = self.clean_code(code)
                         target_code = self._normalize_stock_code(clean_code)
+                        code_mapping[target_code] = code
+                        target_codes_set.add(target_code)
                         
-                        # 尝试多种匹配方式建立映射（按优先级）
+                    # 批量匹配：优先使用精确匹配（最快）
+                    for target_code in target_codes_set:
+                        # 策略1: 精确匹配（最快）
                         mask = code_series == target_code
                         if not mask.any():
+                            # 策略2: 标准化后匹配
                             mask = code_normalized == target_code
                         if not mask.any() and target_code.isdigit():
+                                # 策略3: 去除前导零匹配
                             target_no_zero = target_code.lstrip('0')
                             if target_no_zero and len(target_no_zero) >= 1:
                                 mask = code_normalized == target_no_zero
-                        if not mask.any():
-                            mask = code_series.str.contains(target_code, na=False, regex=False)
                         
-                        # 如果找到匹配，提取价格并验证合理性
                         if mask.any():
                             try:
                                 price = float(realtime_data_cache[mask].iloc[0][price_column])
-                                # 验证价格合理性：大于0且不是异常溢出值（针对短期交易，确保数据准确）
-                                if price > 0 and price < 1e10:  # 过滤异常大的值
+                                if price > 0 and price < 1e10:
+                                    original_code = code_mapping[target_code]
+                                    price_map[original_code] = price
+                            except (ValueError, KeyError, IndexError):
+                                pass
+                    
+                    # 对于未匹配到的代码，尝试包含匹配（较慢，但作为备选）
+                    unmatched_codes = [code for code in code_list if code not in price_map]
+                    if unmatched_codes:
+                        for code in unmatched_codes:
+                            clean_code = self.clean_code(code)
+                            target_code = self._normalize_stock_code(clean_code)
+                            mask = code_series.str.contains(target_code, na=False, regex=False)
+                            if mask.any():
+                                try:
+                                    price = float(realtime_data_cache[mask].iloc[0][price_column])
+                                    if price > 0 and price < 1e10:
                                     price_map[code] = price
                             except (ValueError, KeyError, IndexError):
                                 pass
@@ -582,37 +629,47 @@ class QuantsEngine:
                 current_time = datetime.datetime.now()
                 time_elapsed = (current_time - last_cache_refresh_time).total_seconds()
                 
-                # 刷新条件：处理了足够多的股票（100只）或时间超过1分钟（针对短期交易，提高实时性）
-                if (i > 0 and i % cache_refresh_interval == 0) or time_elapsed > 60:
+                # 性能优化：减少缓存刷新频率，避免影响扫描速度
+                # 刷新条件：处理了足够多的股票（200只）或时间超过2分钟（平衡实时性和性能）
+                if (i > 0 and i % cache_refresh_interval == 0) or time_elapsed > 120:
                     try:
-                        # 刷新实时数据缓存和价格映射表
+                        # 刷新实时数据缓存和价格映射表（使用批量优化方法）
                         new_cache = ak.stock_zh_a_spot_em()
                         if new_cache is not None and not new_cache.empty:
                             realtime_data_cache = new_cache
-                            # 重新建立价格映射表（仅更新已扫描的代码，避免重复处理）
+                            # 使用批量方法重新建立价格映射表（仅更新剩余未扫描的代码）
                             code_column, price_column = self._detect_realtime_columns(realtime_data_cache)
                             if code_column and price_column:
                                 code_series = realtime_data_cache[code_column].astype(str).str.strip()
                                 code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
                                 
-                                # 只更新剩余未扫描的代码（优化：避免重复处理）
-                                for remaining_code in code_list[i:]:
+                                # 批量处理剩余代码（性能优化）
+                                remaining_codes = code_list[i:]
+                                code_mapping = {}
+                                target_codes_set = set()
+                                
+                                for remaining_code in remaining_codes:
                                     clean_code = self.clean_code(remaining_code)
                                     target_code = self._normalize_stock_code(clean_code)
-                                    
+                                    code_mapping[target_code] = remaining_code
+                                    target_codes_set.add(target_code)
+                                
+                                # 批量匹配
+                                for target_code in target_codes_set:
                                     mask = code_series == target_code
                                     if not mask.any():
                                         mask = code_normalized == target_code
-                                    if not mask.any() and target_code.isdigit():
-                                        target_no_zero = target_code.lstrip('0')
-                                        if target_no_zero and len(target_no_zero) >= 1:
-                                            mask = code_normalized == target_no_zero
+                                        if not mask.any() and target_code.isdigit():
+                                            target_no_zero = target_code.lstrip('0')
+                                            if target_no_zero and len(target_no_zero) >= 1:
+                                                mask = code_normalized == target_no_zero
                                     
                                     if mask.any():
                                         try:
                                             price = float(realtime_data_cache[mask].iloc[0][price_column])
                                             if price > 0 and price < 1e10:
-                                                price_map[remaining_code] = price
+                                                original_code = code_mapping[target_code]
+                                                price_map[original_code] = price
                                         except (ValueError, KeyError, IndexError):
                                             pass
                             last_cache_refresh_time = current_time
@@ -717,43 +774,43 @@ class QuantsEngine:
         Returns:
             float: 价格，如果未找到则返回None
         """
-        if df_realtime is None or df_realtime.empty:
+            if df_realtime is None or df_realtime.empty:
             return None
-        
-        # 使用缓存的列名检测方法
-        code_column, price_column = self._detect_realtime_columns(df_realtime)
-        
-        if code_column is None or price_column is None:
+            
+            # 使用缓存的列名检测方法
+            code_column, price_column = self._detect_realtime_columns(df_realtime)
+            
+            if code_column is None or price_column is None:
             return None
-        
+            
         # 优化后的匹配逻辑：使用pandas向量化操作，按优先级依次尝试匹配
-        code_series = df_realtime[code_column].astype(str).str.strip()
-        
+            code_series = df_realtime[code_column].astype(str).str.strip()
+            
         # 策略1: 精确匹配（标准6位代码，最常见情况，优先处理）
-        mask = code_series == target_code
-        if not mask.any():
-            # 策略2: 去除前缀后匹配（处理 'sh600000'、'sz000001' 等格式）
-            code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
-            mask = code_normalized == target_code
-            if not mask.any() and target_code.isdigit():
-                # 策略3: 去除前导零匹配（处理 '1' 匹配 '000001' 的情况）
-                target_no_zero = target_code.lstrip('0')
-                if target_no_zero and len(target_no_zero) >= 1:
-                    mask = code_normalized == target_no_zero
-                # 策略4: 包含匹配（最后备选，性能较低，仅在前三种都失败时使用）
-                if not mask.any():
-                    mask = code_series.str.contains(target_code, na=False, regex=False)
-        
+            mask = code_series == target_code
+            if not mask.any():
+                # 策略2: 去除前缀后匹配（处理 'sh600000'、'sz000001' 等格式）
+                code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
+                mask = code_normalized == target_code
+                if not mask.any() and target_code.isdigit():
+                    # 策略3: 去除前导零匹配（处理 '1' 匹配 '000001' 的情况）
+                    target_no_zero = target_code.lstrip('0')
+                    if target_no_zero and len(target_no_zero) >= 1:
+                        mask = code_normalized == target_no_zero
+                    # 策略4: 包含匹配（最后备选，性能较低，仅在前三种都失败时使用）
+                    if not mask.any():
+                        mask = code_series.str.contains(target_code, na=False, regex=False)
+            
         # 如果找到匹配，提取价格并验证
-        if mask.any():
-            matched_row = df_realtime[mask].iloc[0]
-            try:
-                realtime_price = float(matched_row[price_column])
-                # 验证价格是否合理（大于0，且不是异常溢出值）
-                if realtime_price > 0 and realtime_price < 1e10:
-                    return realtime_price
-            except (ValueError, KeyError, IndexError):
-                pass
+            if mask.any():
+                matched_row = df_realtime[mask].iloc[0]
+                try:
+                    realtime_price = float(matched_row[price_column])
+                    # 验证价格是否合理（大于0，且不是异常溢出值）
+                    if realtime_price > 0 and realtime_price < 1e10:
+                        return realtime_price
+                except (ValueError, KeyError, IndexError):
+                    pass
         
         return None
     
@@ -915,9 +972,9 @@ class QuantsEngine:
                     baostock_price = float(data[-1][1])
                     # 验证价格合理性
                     if baostock_price > 0 and baostock_price < 1e10:
-                        if not bs_already_logged_in:
-                            bs.logout()
-                        return baostock_price  # 返回最新收盘价
+                    if not bs_already_logged_in:
+                        bs.logout()
+                    return baostock_price  # 返回最新收盘价
             
             if not bs_already_logged_in:
                 bs.logout()
