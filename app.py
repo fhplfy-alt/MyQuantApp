@@ -2461,6 +2461,8 @@ if st.session_state['holdings']:
                                         delta=f"{change_amount:+.2f} ({change:+.2f}%)",
                                         delta_color="inverse"
                                     )
+                                    direction_cn = "上涨" if change_amount >= 0 else "下跌"
+                                    st.caption(f"预计较当前{direction_cn} {abs(change_amount):.2f} 元（{change:+.2f}%）")
                         else:
                             st.warning("⚠️ AI预测数据不足")
                     else:
@@ -2590,6 +2592,8 @@ if st.session_state['valid_options']:
                                     delta=f"{change_amount:+.2f} ({change:+.2f}%)",
                                     delta_color="inverse"
                                 )
+                                direction_cn = "上涨" if change_amount >= 0 else "下跌"
+                                st.caption(f"预计较当前{direction_cn} {abs(change_amount):.2f} 元（{change:+.2f}%）")
                         
                         # 显示预测数据表格
                         with st.expander("📋 查看详细预测数据"):
