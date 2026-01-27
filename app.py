@@ -2583,20 +2583,13 @@ if st.session_state['valid_options']:
                             change_amount = pred_price - current_price
                             
                             with pred_cols[i]:
-                                if change > 0:
-                                    st.metric(
-                                        label=date_label,
-                                        value=f"¥{pred_price:.2f}", 
-                                        delta=f"{change_amount:+.2f} ({change:+.2f}%)",
-                                        delta_color="inverse"
-                                    )
-                                else:
-                                    st.metric(
-                                        label=date_label,
-                                        value=f"¥{pred_price:.2f}",
-                                        delta=f"{change_amount:+.2f} ({change:+.2f}%)",
-                                        delta_color="normal"
-                                    )
+                                # 统一配色：使用 inverse，让“涨=红、跌=绿”，箭头方向仍按涨跌变化
+                                st.metric(
+                                    label=date_label,
+                                    value=f"¥{pred_price:.2f}", 
+                                    delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                    delta_color="inverse"
+                                )
                         
                         # 显示预测数据表格
                         with st.expander("📋 查看详细预测数据"):
