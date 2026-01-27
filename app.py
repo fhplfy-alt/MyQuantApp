@@ -183,7 +183,7 @@ try:
     import datetime
     import akshare as ak # 导入akshare用于获取实时行情
     from sklearn.linear_model import LinearRegression
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 except ImportError as e:
     st.error(f"❌ 启动失败！缺少必要运行库: {e}")
     st.stop()
@@ -667,12 +667,15 @@ class QuantsEngine:
         # 并发策略（方案B）：主线程串行拉取历史数据（baostock更稳定），线程池并行做指标计算（CPU更吃）
         # 目标：在不引入接口不稳定风险的前提下，将500只从10+分钟压到约3~6分钟区间
         max_workers = min(12, (os.cpu_count() or 4) * 2)
+        max_pending_futures = max_workers * 4  # 控制队列长度，避免内存堆积并让“命中”尽快产出
+
+        # 预先计算日期范围（避免每只股票重复计算，减少小开销）
+        end_local = datetime.datetime.now().strftime("%Y-%m-%d")
+        start_local = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
 
         def fetch_history_rows(stock_code):
             """拉取单只股票历史数据（网络IO，保持串行更稳）"""
             stock_code = self.clean_code(stock_code)
-            end_local = datetime.datetime.now().strftime("%Y-%m-%d")
-            start_local = (datetime.datetime.now() - datetime.timedelta(days=150)).strftime("%Y-%m-%d")
             rows = []
             rs = bs.query_history_k_data_plus(
                 stock_code,
@@ -685,6 +688,46 @@ class QuantsEngine:
             while rs.next():
                 rows.append(rs.get_row_data())
             return stock_code, rows
+
+        def _consume_done_futures(future_map, max_to_consume=None):
+            """消费已完成的future，把命中结果写入results/alerts/valid_codes_list（保持原功能不变）"""
+            if not future_map:
+                return 0
+
+            done, _not_done = wait(set(future_map.keys()), timeout=0, return_when=FIRST_COMPLETED)
+            consumed = 0
+            for fut in list(done):
+                stock_code = future_map.pop(fut, None)
+                if stock_code is None:
+                    continue
+                try:
+                    analysis = fut.result()
+                except Exception:
+                    analysis = None
+
+                if analysis:
+                    name, industry, _ipo = self._get_basic_info_cached(stock_code)
+                    if self.is_valid(stock_code, name):
+                        results.append({
+                            "代码": stock_code,
+                            "名称": name,
+                            "所属行业": industry,
+                            "现价": analysis["display_price"],
+                            "涨跌": analysis["pct_chg"],
+                            "获利筹码": analysis["winner_rate"],
+                            "风险评级": analysis["risk_level"],
+                            "策略信号": analysis["signals"],
+                            "综合评级": analysis["action"],
+                            "priority": analysis["priority"]
+                        })
+                        if analysis["priority"] >= 90:
+                            alerts.append(f"{name}")
+                        valid_codes_list.append(f"{stock_code} | {name}")
+
+                consumed += 1
+                if max_to_consume is not None and consumed >= max_to_consume:
+                    break
+            return consumed
 
         completed = 0
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -706,22 +749,29 @@ class QuantsEngine:
                 )
                 future_map[fut] = stock_code
 
+                # 流水线：边提交边消费已完成任务，让“命中”在扫描过程中就持续产出
+                _consume_done_futures(future_map, max_to_consume=2)
+
+                # 限制pending队列长度，避免内存堆积；必要时阻塞等待一些任务完成
+                while len(future_map) >= max_pending_futures:
+                    # 阻塞等至少一个完成
+                    wait(set(future_map.keys()), timeout=0.5, return_when=FIRST_COMPLETED)
+                    _consume_done_futures(future_map, max_to_consume=10)
+
                 completed += 1
                 if completed % update_interval == 0 or completed == total:
                     hit_count = len(results)
                     progress_bar.progress(completed / total, text=f"🔍 扫描中: {stock_code} ({completed}/{total}) | 命中: {hit_count} 只")
 
-            # 收集并发计算结果（此阶段可并行完成，提升总吞吐）
-            processed = 0
+            # 收尾：消费剩余future
+            processed = completed
             for fut in as_completed(list(future_map.keys())):
                 stock_code = future_map.get(fut)
                 try:
                     analysis = fut.result()
                 except Exception:
                     analysis = None
-
                 if analysis:
-                    # 对命中股票再查基础信息（有缓存），保持输出字段不变
                     name, industry, _ipo = self._get_basic_info_cached(stock_code)
                     if self.is_valid(stock_code, name):
                         results.append({
@@ -740,10 +790,11 @@ class QuantsEngine:
                             alerts.append(f"{name}")
                         valid_codes_list.append(f"{stock_code} | {name}")
 
+                # 此处processed代表“已完成计算的数量”，用来让进度条更符合直觉
                 processed += 1
-                if processed % (update_interval * 2) == 0 or processed == total:
+                if processed % (update_interval * 2) == 0 or processed >= total:
                     hit_count = len(results)
-                    progress_bar.progress(processed / total, text=f"🧮 计算中: {stock_code} ({processed}/{total}) | 命中: {hit_count} 只")
+                    progress_bar.progress(min(processed / total, 1.0), text=f"🧮 计算中: {stock_code} ({min(processed,total)}/{total}) | 命中: {hit_count} 只")
                     time.sleep(0.01)
 
         bs.logout()
