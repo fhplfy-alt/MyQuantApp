@@ -2253,14 +2253,12 @@ if st.session_state['holdings']:
             st.metric("总成本", f"¥{total_cost:,.2f}")
         with col2:
             # A股习惯：红色=上涨/盈利，绿色=下跌/亏损
+            # Streamlit 默认是“正数绿、负数红”，这里统一用 inverse 反转为“正数红、负数绿”
             if total_profit > 0:
-                # 盈利显示红色（inverse反转颜色：正数红色）
                 st.metric("总盈亏", f"¥{total_profit:,.2f}", delta=f"+{total_profit_rate:.2f}%", delta_color="inverse")
             elif total_profit < 0:
-                # 亏损显示绿色（normal正常颜色：负数绿色）
-                st.metric("总盈亏", f"¥{total_profit:,.2f}", delta=f"{total_profit_rate:.2f}%", delta_color="normal")
+                st.metric("总盈亏", f"¥{total_profit:,.2f}", delta=f"{total_profit_rate:.2f}%", delta_color="inverse")
             else:
-                # 盈亏平衡
                 st.metric("总盈亏", f"¥{total_profit:,.2f}", delta="0.00%")
         with col3:
             st.metric("持仓数量", len(st.session_state['holdings']))
@@ -2456,20 +2454,13 @@ if st.session_state['holdings']:
                                 change_amount = pred_price - current_price_pred
                                 
                                 with pred_cols[i]:
-                                    if change > 0:
-                                        st.metric(
-                                            label=date_label,
-                                            value=f"¥{pred_price:.2f}",
-                                            delta=f"{change_amount:+.2f} ({change:+.2f}%)",
-                                            delta_color="inverse"
-                                        )
-                                    else:
-                                        st.metric(
-                                            label=date_label,
-                                            value=f"¥{pred_price:.2f}",
-                                            delta=f"{change_amount:+.2f} ({change:+.2f}%)",
-                                            delta_color="normal"
-                                        )
+                                    # 统一：红涨绿跌（inverse 反转默认配色）
+                                    st.metric(
+                                        label=date_label,
+                                        value=f"¥{pred_price:.2f}",
+                                        delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                        delta_color="inverse"
+                                    )
                         else:
                             st.warning("⚠️ AI预测数据不足")
                     else:
@@ -2488,12 +2479,10 @@ if st.session_state['scan_res']:
     total_count = len(df_scan)
     st.success(f"✅ **扫描完成！共命中 {total_count} 只符合条件的股票**")
     
-    # 显示主力高控盘标的（priority >= 90的股票）
+    # 显示主力高控盘标的（priority >= 90的股票）——全部展示股票名称，避免“等X只”省略
     if 'alerts' in st.session_state and st.session_state['alerts']:
         alert_count = len(st.session_state['alerts'])
-        alert_names = "、".join(st.session_state['alerts'][:5])  # 最多显示5个
-        if len(st.session_state['alerts']) > 5:
-            alert_names += f"等{alert_count}只"
+        alert_names = "、".join(st.session_state['alerts'])
         st.success(f"🔥 **发现 {alert_count} 只【主力高控盘】标的：{alert_names}**")
     
     # 配置列提示信息
