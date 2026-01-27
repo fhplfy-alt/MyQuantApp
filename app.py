@@ -505,17 +505,17 @@ class QuantsEngine:
         # 策略2：如果映射表中没有，或价格异常，则调用get_current_price获取实时价格
         # 性能优化：只在映射表未命中时才尝试，减少不必要的网络请求
         if display_price == curr['close'] and (price_map is None or code not in price_map):
-        try:
-            current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache, bs_already_logged_in=True)
-            # 如果获取实时价格成功，使用实时价格
-            if current_realtime_price is not None and current_realtime_price > 0:
+            try:
+                current_realtime_price = self.get_current_price(code, realtime_data_cache=realtime_data_cache, bs_already_logged_in=True)
+                # 如果获取实时价格成功，使用实时价格
+                if current_realtime_price is not None and current_realtime_price > 0:
                     # 再次验证价格合理性
                     price_diff_ratio = abs(current_realtime_price - curr['close']) / curr['close'] if curr['close'] > 0 else 1.0
                     if price_diff_ratio <= 0.20:  # 允许20%的价格波动
-                display_price = current_realtime_price
-        except:
-            # 静默处理异常，使用历史收盘价作为备用，不影响扫描
-            pass
+                        display_price = current_realtime_price
+            except:
+                # 静默处理异常，使用历史收盘价作为备用，不影响扫描
+                pass
 
         return {
             "result": {
@@ -602,9 +602,9 @@ class QuantsEngine:
                                 try:
                                     price = float(realtime_data_cache[mask].iloc[0][price_column])
                                     if price > 0 and price < 1e10:
-                                    price_map[code] = price
-                            except (ValueError, KeyError, IndexError):
-                                pass
+                                        price_map[code] = price
+                                except (ValueError, KeyError, IndexError):
+                                    pass
         except Exception:
             # 如果获取失败，继续使用历史数据，不影响扫描
             pass
@@ -774,21 +774,21 @@ class QuantsEngine:
         Returns:
             float: 价格，如果未找到则返回None
         """
-            if df_realtime is None or df_realtime.empty:
+        if df_realtime is None or df_realtime.empty:
             return None
-            
-            # 使用缓存的列名检测方法
-            code_column, price_column = self._detect_realtime_columns(df_realtime)
-            
-            if code_column is None or price_column is None:
+        
+        # 使用缓存的列名检测方法
+        code_column, price_column = self._detect_realtime_columns(df_realtime)
+        
+        if code_column is None or price_column is None:
             return None
-            
+        
         # 优化后的匹配逻辑：使用pandas向量化操作，按优先级依次尝试匹配
-            code_series = df_realtime[code_column].astype(str).str.strip()
-            
+        code_series = df_realtime[code_column].astype(str).str.strip()
+        
         # 策略1: 精确匹配（标准6位代码，最常见情况，优先处理）
-            mask = code_series == target_code
-            if not mask.any():
+        mask = code_series == target_code
+        if not mask.any():
                 # 策略2: 去除前缀后匹配（处理 'sh600000'、'sz000001' 等格式）
                 code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
                 mask = code_normalized == target_code
@@ -802,7 +802,7 @@ class QuantsEngine:
                         mask = code_series.str.contains(target_code, na=False, regex=False)
             
         # 如果找到匹配，提取价格并验证
-            if mask.any():
+        if mask.any():
                 matched_row = df_realtime[mask].iloc[0]
                 try:
                     realtime_price = float(matched_row[price_column])
@@ -972,9 +972,9 @@ class QuantsEngine:
                     baostock_price = float(data[-1][1])
                     # 验证价格合理性
                     if baostock_price > 0 and baostock_price < 1e10:
-                    if not bs_already_logged_in:
-                        bs.logout()
-                    return baostock_price  # 返回最新收盘价
+                        if not bs_already_logged_in:
+                            bs.logout()
+                        return baostock_price  # 返回最新收盘价
             
             if not bs_already_logged_in:
                 bs.logout()
