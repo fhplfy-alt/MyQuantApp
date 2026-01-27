@@ -585,13 +585,20 @@ class QuantsEngine:
         progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total}) | 命中: 0 只")
         
         # 在扫描开始时，尝试获取一次实时行情数据（用于优化扫描过程中的价格获取）
-        # 如果获取失败或超时，继续使用历史数据，不影响扫描流程
+        # 增加超时保护，避免第三方行情接口卡死导致整体扫描长时间停滞
         realtime_data_cache = None
         price_map = {}  # 代码到价格的映射表，用于快速查找
+
+        def _fetch_spot_em_with_timeout(timeout_seconds=6):
+            try:
+                with ThreadPoolExecutor(max_workers=1) as tmp_exec:
+                    fut = tmp_exec.submit(ak.stock_zh_a_spot_em)
+                    return fut.result(timeout=timeout_seconds)
+            except Exception:
+                return None
         
         try:
-            realtime_data_cache = ak.stock_zh_a_spot_em()
-            
+            realtime_data_cache = _fetch_spot_em_with_timeout()
             # 如果成功获取实时数据，预处理建立价格映射表（优化性能）
             if realtime_data_cache is not None and not realtime_data_cache.empty:
                 code_column, price_column = self._detect_realtime_columns(realtime_data_cache)
