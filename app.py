@@ -232,6 +232,12 @@ class QuantsEngine:
         self._realtime_code_column = None
         self._realtime_price_column = None
         self._realtime_columns_checked = False
+        # 数据源优先级配置（针对短期交易，优先使用更实时的数据源）
+        self.price_data_sources = [
+            'akshare_spot_em',      # akshare东方财富实时行情（最常用）
+            'akshare_spot',          # akshare实时行情（备选）
+            'akshare_spot_sina',     # akshare新浪实时行情（备选）
+        ]
     
     def clean_code(self, code):
         code = str(code).strip()
@@ -564,9 +570,9 @@ class QuantsEngine:
         else:
             update_interval = 10  # 500个以上，每10个更新一次
         
-        # 针对短期交易：如果扫描时间可能较长（超过500只股票），考虑刷新实时数据
-        # 刷新策略：每处理200只股票或扫描时间超过2分钟时刷新一次（可选）
-        cache_refresh_interval = 200  # 每200只股票刷新一次缓存
+        # 针对短期交易：如果扫描时间可能较长，考虑刷新实时数据
+        # 刷新策略：每处理100只股票或扫描时间超过1分钟时刷新一次（提高实时性）
+        cache_refresh_interval = 100  # 每100只股票刷新一次缓存（缩短间隔，提高实时性）
         last_cache_refresh_time = datetime.datetime.now()  # 使用datetime模块的datetime类
         
         for i, code in enumerate(code_list):
@@ -576,8 +582,8 @@ class QuantsEngine:
                 current_time = datetime.datetime.now()
                 time_elapsed = (current_time - last_cache_refresh_time).total_seconds()
                 
-                # 刷新条件：处理了足够多的股票（200只）或时间超过2分钟
-                if (i > 0 and i % cache_refresh_interval == 0) or time_elapsed > 120:
+                # 刷新条件：处理了足够多的股票（100只）或时间超过1分钟（针对短期交易，提高实时性）
+                if (i > 0 and i % cache_refresh_interval == 0) or time_elapsed > 60:
                     try:
                         # 刷新实时数据缓存和价格映射表
                         new_cache = ak.stock_zh_a_spot_em()
@@ -700,14 +706,169 @@ class QuantsEngine:
         
         return code_clean
     
-    def get_current_price(self, code, realtime_data_cache=None, bs_already_logged_in=False):
-        """获取股票当前价格 (优先使用实时行情)
+    def _get_price_from_dataframe(self, df_realtime, target_code, clean_code):
+        """从DataFrame中提取价格（通用方法，支持多种数据源格式）
         
-        优化说明（针对短期交易）：
-        1. 使用列名缓存，避免重复检测
-        2. 简化代码匹配逻辑，使用更高效的pandas操作
-        3. 优化异常处理，减少不必要的开销
-        4. 增加价格合理性验证，过滤异常值（如涨停/跌停外的异常波动）
+        Args:
+            df_realtime: 实时行情DataFrame
+            target_code: 标准化后的6位代码
+            clean_code: 清理后的代码（带前缀）
+            
+        Returns:
+            float: 价格，如果未找到则返回None
+        """
+        if df_realtime is None or df_realtime.empty:
+            return None
+        
+        # 使用缓存的列名检测方法
+        code_column, price_column = self._detect_realtime_columns(df_realtime)
+        
+        if code_column is None or price_column is None:
+            return None
+        
+        # 优化后的匹配逻辑：使用pandas向量化操作，按优先级依次尝试匹配
+        code_series = df_realtime[code_column].astype(str).str.strip()
+        
+        # 策略1: 精确匹配（标准6位代码，最常见情况，优先处理）
+        mask = code_series == target_code
+        if not mask.any():
+            # 策略2: 去除前缀后匹配（处理 'sh600000'、'sz000001' 等格式）
+            code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
+            mask = code_normalized == target_code
+            if not mask.any() and target_code.isdigit():
+                # 策略3: 去除前导零匹配（处理 '1' 匹配 '000001' 的情况）
+                target_no_zero = target_code.lstrip('0')
+                if target_no_zero and len(target_no_zero) >= 1:
+                    mask = code_normalized == target_no_zero
+                # 策略4: 包含匹配（最后备选，性能较低，仅在前三种都失败时使用）
+                if not mask.any():
+                    mask = code_series.str.contains(target_code, na=False, regex=False)
+        
+        # 如果找到匹配，提取价格并验证
+        if mask.any():
+            matched_row = df_realtime[mask].iloc[0]
+            try:
+                realtime_price = float(matched_row[price_column])
+                # 验证价格是否合理（大于0，且不是异常溢出值）
+                if realtime_price > 0 and realtime_price < 1e10:
+                    return realtime_price
+            except (ValueError, KeyError, IndexError):
+                pass
+        
+        return None
+    
+    def _try_akshare_spot_em(self, target_code, clean_code, realtime_data_cache=None):
+        """尝试从akshare东方财富实时行情获取价格
+        
+        Args:
+            target_code: 标准化后的6位代码
+            clean_code: 清理后的代码
+            realtime_data_cache: 可选的缓存数据
+            
+        Returns:
+            float: 价格，如果失败则返回None
+        """
+        try:
+            df_realtime = realtime_data_cache if realtime_data_cache is not None else ak.stock_zh_a_spot_em()
+            return self._get_price_from_dataframe(df_realtime, target_code, clean_code)
+        except Exception:
+            return None
+    
+    def _try_akshare_spot(self, target_code, clean_code):
+        """尝试从akshare实时行情获取价格（备选数据源1）
+        
+        使用akshare的其他实时行情接口作为备选
+        
+        Args:
+            target_code: 标准化后的6位代码
+            clean_code: 清理后的代码
+            
+        Returns:
+            float: 价格，如果失败则返回None
+        """
+        try:
+            # 方法1：尝试使用akshare的实时行情接口（全市场）
+            df_realtime = ak.stock_zh_a_spot()
+            if df_realtime is not None and not df_realtime.empty:
+                price = self._get_price_from_dataframe(df_realtime, target_code, clean_code)
+                if price is not None:
+                    return price
+        except Exception:
+            pass
+        
+        # 方法2：尝试使用akshare的腾讯实时行情接口
+        try:
+            # 转换代码格式：sh.600000 -> sh600000, sz.000001 -> sz000001
+            if clean_code.startswith('sh.'):
+                symbol = f"sh{target_code}"
+            elif clean_code.startswith('sz.'):
+                symbol = f"sz{target_code}"
+            else:
+                symbol = target_code
+            
+            # 使用腾讯实时行情接口
+            df_realtime = ak.stock_zh_a_spot_qq(symbol=symbol)
+            if df_realtime is not None and not df_realtime.empty:
+                price = self._get_price_from_dataframe(df_realtime, target_code, clean_code)
+                if price is not None:
+                    return price
+        except Exception:
+            pass
+        
+        return None
+    
+    def _try_akshare_spot_sina(self, target_code, clean_code):
+        """尝试从akshare新浪实时行情获取价格（备选数据源2）
+        
+        Args:
+            target_code: 标准化后的6位代码
+            clean_code: 清理后的代码
+            
+        Returns:
+            float: 价格，如果失败则返回None
+        """
+        try:
+            # 转换代码格式：sh.600000 -> sh600000, sz.000001 -> sz000001
+            if clean_code.startswith('sh.'):
+                symbol = f"sh{target_code}"
+            elif clean_code.startswith('sz.'):
+                symbol = f"sz{target_code}"
+            else:
+                symbol = target_code
+            
+            # 方法1：尝试使用akshare的新浪实时行情接口（全市场）
+            try:
+                df_realtime = ak.stock_zh_a_spot_sina()
+                if df_realtime is not None and not df_realtime.empty:
+                    price = self._get_price_from_dataframe(df_realtime, target_code, clean_code)
+                    if price is not None:
+                        return price
+            except Exception:
+                pass
+            
+            # 方法2：尝试使用单股票接口（如果全市场接口失败）
+            try:
+                df_realtime = ak.stock_zh_a_spot_sina(symbol=symbol)
+                if df_realtime is not None and not df_realtime.empty:
+                    price = self._get_price_from_dataframe(df_realtime, target_code, clean_code)
+                    if price is not None:
+                        return price
+            except Exception:
+                pass
+        except Exception:
+            pass
+        
+        return None
+    
+    def get_current_price(self, code, realtime_data_cache=None, bs_already_logged_in=False):
+        """获取股票当前价格 (多数据源方案，提高实时性)
+        
+        优化说明（针对短期交易，解决价格不实时的问题）：
+        1. 多数据源按优先级尝试：akshare东方财富 -> akshare实时 -> akshare新浪 -> baostock
+        2. 使用列名缓存，避免重复检测
+        3. 简化代码匹配逻辑，使用更高效的pandas操作
+        4. 优化异常处理，减少不必要的开销
+        5. 增加价格合理性验证，过滤异常值
         
         Args:
             code: 股票代码
@@ -718,56 +879,22 @@ class QuantsEngine:
             float: 实时价格，如果获取失败则返回None
         """
         clean_code = self.clean_code(code)
+        target_code = self._normalize_stock_code(clean_code)
         
-        # 尝试从akshare获取实时价格（优先使用缓存）
-        try:
-            df_realtime = realtime_data_cache if realtime_data_cache is not None else ak.stock_zh_a_spot_em()
-            
-            # 检查DataFrame是否为空
-            if df_realtime is None or df_realtime.empty:
-                raise ValueError("akshare返回的数据为空")
-            
-            # 使用缓存的列名检测方法
-            code_column, price_column = self._detect_realtime_columns(df_realtime)
-            
-            # 如果找不到必要的列，抛出异常
-            if code_column is None or price_column is None:
-                raise ValueError(f"无法找到必要的列：代码列={code_column}, 价格列={price_column}, 可用列={list(df_realtime.columns)}")
-            
-            # 标准化目标代码为6位数字格式（统一格式，提高匹配效率）
-            target_code = self._normalize_stock_code(clean_code)
-            
-            # 优化后的匹配逻辑：使用pandas向量化操作，按优先级依次尝试匹配
-            code_series = df_realtime[code_column].astype(str).str.strip()
-            
-            # 策略1: 精确匹配（标准6位代码，最常见情况，优先处理）
-            mask = code_series == target_code
-            if not mask.any():
-                # 策略2: 去除前缀后匹配（处理 'sh600000'、'sz000001' 等格式）
-                code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
-                mask = code_normalized == target_code
-                if not mask.any() and target_code.isdigit():
-                    # 策略3: 去除前导零匹配（处理 '1' 匹配 '000001' 的情况）
-                    target_no_zero = target_code.lstrip('0')
-                    if target_no_zero and len(target_no_zero) >= 1:
-                        mask = code_normalized == target_no_zero
-                    # 策略4: 包含匹配（最后备选，性能较低，仅在前三种都失败时使用）
-                    if not mask.any():
-                        mask = code_series.str.contains(target_code, na=False, regex=False)
-            
-            # 如果找到匹配，提取价格并验证
-            if mask.any():
-                matched_row = df_realtime[mask].iloc[0]
-                try:
-                    realtime_price = float(matched_row[price_column])
-                    # 验证价格是否合理（大于0，且不是异常溢出值）
-                    if realtime_price > 0 and realtime_price < 1e10:  # 过滤异常大的值
-                        return realtime_price
-                except (ValueError, KeyError, IndexError):
-                    pass
-        except Exception:
-            # 静默失败，继续尝试Baostock（保持原有行为）
-            pass
+        # 策略1：优先使用akshare东方财富实时行情（最常用，支持缓存）
+        price = self._try_akshare_spot_em(target_code, clean_code, realtime_data_cache)
+        if price is not None:
+            return price
+        
+        # 策略2：尝试akshare实时行情（备选数据源1）
+        price = self._try_akshare_spot(target_code, clean_code)
+        if price is not None:
+            return price
+        
+        # 策略3：尝试akshare新浪实时行情（备选数据源2）
+        price = self._try_akshare_spot_sina(target_code, clean_code)
+        if price is not None:
+            return price
         
         # 如果akshare失败，或者未找到数据，则回退到Baostock获取最新收盘价
         # 注意：对于短期交易，收盘价可能不是最新价格，但作为备用方案
