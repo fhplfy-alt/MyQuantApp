@@ -763,8 +763,9 @@ class QuantsEngine:
                     hit_count = len(results)
                     progress_bar.progress(completed / total, text=f"🔍 扫描中: {stock_code} ({completed}/{total}) | 命中: {hit_count} 只")
 
-            # 收尾：消费剩余future
-            processed = completed
+            # 收尾：等待剩余future完成（仅优化进度展示，不改变扫描/策略结果）
+            remaining_total = len(future_map)
+            done_tail = 0
             for fut in as_completed(list(future_map.keys())):
                 stock_code = future_map.get(fut)
                 try:
@@ -790,11 +791,13 @@ class QuantsEngine:
                             alerts.append(f"{name}")
                         valid_codes_list.append(f"{stock_code} | {name}")
 
-                # 此处processed代表“已完成计算的数量”，用来让进度条更符合直觉
-                processed += 1
-                if processed % (update_interval * 2) == 0 or processed >= total:
+                done_tail += 1
+                # 进度=总数 - 剩余future（失败/跳过的会自然计入已完成），避免出现“500/500但还在算”的错觉
+                remaining_now = max(remaining_total - done_tail, 0)
+                processed_now = total - remaining_now
+                if done_tail % (update_interval * 2) == 0 or remaining_now == 0:
                     hit_count = len(results)
-                    progress_bar.progress(min(processed / total, 1.0), text=f"🧮 计算中: {stock_code} ({min(processed,total)}/{total}) | 命中: {hit_count} 只")
+                    progress_bar.progress(min(processed_now / total, 1.0), text=f"🧮 计算收尾: {stock_code} ({min(processed_now, total)}/{total}) | 命中: {hit_count} 只")
                     time.sleep(0.01)
 
         bs.logout()
