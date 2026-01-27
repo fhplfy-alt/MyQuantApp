@@ -2483,22 +2483,10 @@ if st.session_state['scan_res']:
     total_count = len(df_scan)
     st.success(f"✅ **扫描完成！共命中 {total_count} 只符合条件的股票**")
     
-    # 显示主力高控盘标的（priority >= 90的股票）
-    # 体验优化：在名单里同时展示【代码】+名称（并加序号），方便用户在下方表格快速定位
+    # 显示主力高控盘标的（priority >= 90的股票）——上方仅显示股票名称，便于阅读
     if 'alerts' in st.session_state and st.session_state['alerts']:
-        try:
-            df_alert = df_scan[df_scan['priority'] >= 90][['代码', '名称', 'priority']].copy()
-            df_alert = df_alert.sort_values(by=['priority', '名称'], ascending=[False, True])
-            items = []
-            for idx, row in enumerate(df_alert.itertuples(index=False), start=1):
-                code = getattr(row, '代码')
-                name = getattr(row, '名称')
-                items.append(f"{idx:02d}.【{code}】{name}")
-            alert_names = "、".join(items) if items else "、".join(st.session_state['alerts'])
-            alert_count = len(items) if items else len(st.session_state['alerts'])
-        except Exception:
-            alert_count = len(st.session_state['alerts'])
-            alert_names = "、".join(st.session_state['alerts'])
+        alert_count = len(st.session_state['alerts'])
+        alert_names = "、".join(st.session_state['alerts'])
         st.success(f"🔥 **发现 {alert_count} 只【主力高控盘】标的：{alert_names}**")
     
     # 配置列提示信息
