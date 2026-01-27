@@ -388,17 +388,9 @@ class QuantsEngine:
                 except (ValueError, IndexError):
                     pass  # 如果转换失败，继续后续处理
             
-            # 再获取基本信息和行业信息（用于显示）
-            rs_info = bs.query_stock_basic(code=code)
-            if rs_info.next():
-                row = rs_info.get_row_data()
-                info['name'] = row[1]
-                info['ipoDate'] = row[2]
-            
-            rs_ind = bs.query_stock_industry(code)
-            if rs_ind.next(): info['industry'] = rs_ind.get_row_data()[3] 
-            
-            if not self.is_valid(code, info['name']): return None
+            # 性能优化：延迟获取基本信息和行业信息，只在通过策略筛选后才获取
+            # 这样可以减少约2/3的无效查询（因为大部分股票priority=0会被过滤掉）
+            # 基本信息将在priority > 0时再获取
         except: return None
 
         # 数据已在上面处理，这里直接使用
@@ -486,6 +478,24 @@ class QuantsEngine:
                 action = "HOLD (持有)"
 
         if priority == 0: return None
+
+        # 性能优化：只在通过策略筛选后才获取基本信息和行业信息（用于显示）
+        # 这样可以大幅减少无效查询，提升扫描速度（减少约2/3的baostock查询）
+        try:
+            rs_info = bs.query_stock_basic(code=code)
+            if rs_info.next():
+                row = rs_info.get_row_data()
+                info['name'] = row[1]
+                info['ipoDate'] = row[2]
+            
+            rs_ind = bs.query_stock_industry(code)
+            if rs_ind.next(): info['industry'] = rs_ind.get_row_data()[3]
+            
+            # 最后检查有效性（如果无效，返回None）
+            if not self.is_valid(code, info['name']): return None
+        except:
+            # 如果获取基本信息失败，使用默认值继续（不影响扫描）
+            pass
 
         # 在返回结果前，获取实时价格更新"现价"字段（保持策略判断逻辑不变）
         # 优化：优先使用价格映射表，避免重复匹配，提高短期交易实时性
