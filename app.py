@@ -492,13 +492,13 @@ class QuantsEngine:
                     action = "BUY (博弈)"
         
         if k is not None and d is not None and len(df) >= 2:
-                prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1])
-                if prev_k is not None and prev_d is not None:
-                    if prev_k <= prev_d and k > d and rsi is not None and rsi > 50:
-                        signal_tags.append("🎯KDJ金叉")
-                        priority = max(priority, 70)
-                        if action in ["WAIT (观望)", "HOLD (持有)"]:
-                            action = "BUY (博弈)"
+            prev_k, prev_d, _ = self.calc_kdj(df.iloc[:-1])
+            if prev_k is not None and prev_d is not None:
+                if prev_k <= prev_d and k > d and rsi is not None and rsi > 50:
+                    signal_tags.append("🎯KDJ金叉")
+                    priority = max(priority, 70)
+                    if action in ["WAIT (观望)", "HOLD (持有)"]:
+                        action = "BUY (博弈)"
         
         if len(df) >= 200 and not pd.isna(df['MA200'].iloc[-1]):
             ma200_current = df['MA200'].iloc[-1]
