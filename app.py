@@ -2474,19 +2474,36 @@ if st.session_state['scan_res']:
     df_scan['is_high_priority'] = df_scan['priority'] >= 90
     df_scan = df_scan.sort_values(by=['is_high_priority', 'priority'], ascending=[False, False])
     df_scan = df_scan.drop(columns=['is_high_priority'], errors='ignore')
+
+    # 标记主力高控盘标的，方便列表中快速定位（不影响原有数据结构）
+    alert_set = set(st.session_state.get('alerts', []) or [])
+    df_scan['主力标记'] = df_scan['名称'].apply(lambda x: "🔥" if x in alert_set else "")
     
     # 显示命中股票数量
     total_count = len(df_scan)
     st.success(f"✅ **扫描完成！共命中 {total_count} 只符合条件的股票**")
     
-    # 显示主力高控盘标的（priority >= 90的股票）——全部展示股票名称，避免“等X只”省略
+    # 显示主力高控盘标的（priority >= 90的股票）
+    # 体验优化：在名单里同时展示【代码】+名称（并加序号），方便用户在下方表格快速定位
     if 'alerts' in st.session_state and st.session_state['alerts']:
-        alert_count = len(st.session_state['alerts'])
-        alert_names = "、".join(st.session_state['alerts'])
+        try:
+            df_alert = df_scan[df_scan['priority'] >= 90][['代码', '名称', 'priority']].copy()
+            df_alert = df_alert.sort_values(by=['priority', '名称'], ascending=[False, True])
+            items = []
+            for idx, row in enumerate(df_alert.itertuples(index=False), start=1):
+                code = getattr(row, '代码')
+                name = getattr(row, '名称')
+                items.append(f"{idx:02d}.【{code}】{name}")
+            alert_names = "、".join(items) if items else "、".join(st.session_state['alerts'])
+            alert_count = len(items) if items else len(st.session_state['alerts'])
+        except Exception:
+            alert_count = len(st.session_state['alerts'])
+            alert_names = "、".join(st.session_state['alerts'])
         st.success(f"🔥 **发现 {alert_count} 只【主力高控盘】标的：{alert_names}**")
     
     # 配置列提示信息
     column_config = {
+        "主力标记": st.column_config.TextColumn("标记", help="主力高控盘标的，用🔥标出"),
         "代码": st.column_config.TextColumn("代码", help="股票代码"),
         "名称": st.column_config.TextColumn("名称", help="股票名称"),
         "所属行业": st.column_config.TextColumn("所属行业", help="股票所属行业分类"),
