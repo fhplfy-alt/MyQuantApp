@@ -3,7 +3,7 @@ from io import BytesIO
 import json
 import os
 import hashlib
-from datetime import datetime
+import datetime
 
 # ==========================================
 # ⚠️ 1. 用户管理系统 (注册+登录)
@@ -61,7 +61,7 @@ def register_user(username, password):
     # 保存用户信息
     users[username] = {
         "password_hash": hash_password(password),
-        "register_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "register_date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
     if save_users(users):
@@ -2084,7 +2084,7 @@ if show_admin:
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df_export.to_excel(writer, index=False, sheet_name='用户信息')
                     excel_data = output.getvalue()
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"用户信息_{timestamp}.xlsx"
                     st.download_button(
                         label="📥 下载用户信息Excel",
@@ -2114,7 +2114,7 @@ if show_admin:
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df_export.to_excel(writer, index=False, sheet_name='持仓数据')
                     excel_data = output.getvalue()
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"持仓数据_{timestamp}.xlsx"
                     st.download_button(
                         label="📥 下载持仓数据Excel",
@@ -2152,7 +2152,7 @@ if show_admin:
                         stock_stats = stock_stats.sort_values("持有用户数", ascending=False)
                         stock_stats.to_excel(writer, index=False, sheet_name='股票统计')
                     excel_data = output.getvalue()
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"统计数据_{timestamp}.xlsx"
                     st.download_button(
                         label="📥 下载统计数据Excel",
