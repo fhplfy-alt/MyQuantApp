@@ -2995,10 +2995,29 @@ if st.session_state['scan_res']:
     st.success(f"✅ **扫描完成！共命中 {total_count} 只符合条件的股票**")
     
     # 显示主力高控盘标的（priority >= 90的股票）——上方仅显示股票名称，便于阅读
-    if 'alerts' in st.session_state and st.session_state['alerts']:
-        alert_count = len(st.session_state['alerts'])
-        alert_names = "、".join(st.session_state['alerts'])
+    # 检查 alerts 是否存在且不为空
+    alerts = st.session_state.get('alerts', [])
+    if alerts and len(alerts) > 0:
+        alert_count = len(alerts)
+        alert_names = "、".join(alerts)
         st.success(f"🔥 **发现 {alert_count} 只【主力高控盘】标的：{alert_names}**")
+    else:
+        # 检查是否有 priority >= 90 的股票（从扫描结果中查找）
+        high_priority_stocks = df_scan[df_scan['priority'] >= 90]
+        if len(high_priority_stocks) > 0:
+            # 如果有但 alerts 为空，说明可能是数据同步问题，从结果中提取
+            high_priority_names = high_priority_stocks['名称'].tolist()
+            alert_count = len(high_priority_names)
+            alert_names = "、".join(high_priority_names)
+            st.success(f"🔥 **发现 {alert_count} 只【主力高控盘】标的：{alert_names}**")
+            # 同步更新 alerts
+            st.session_state['alerts'] = high_priority_names
+        else:
+            # 显示策略说明
+            st.info("💡 本次扫描未发现 priority ≥ 90 的【主力高控盘】标的。\n\n"
+                   "**触发条件说明：**\n"
+                   "- 🐲 **妖股基因**（priority=90）：近60日涨停≥3次 + 获利筹码>80% + 放量确认 + 主力净流入>1000万\n"
+                   "- 👑 **四星共振**（priority=100）：近20日有涨停 + 倍量 + 放量确认 + 主力净流入>1000万")
     
     # 配置列提示信息
     column_config = {
