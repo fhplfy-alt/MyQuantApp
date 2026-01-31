@@ -972,6 +972,19 @@ class QuantsEngine:
                 if analysis:
                     name, industry, _ipo = self._get_basic_info_cached(stock_code)
                     if self.is_valid(stock_code, name):
+                        # 获取主力净流入
+                        main_force_inflow = 0
+                        try:
+                            main_force_inflow = self.get_main_force_net_inflow(stock_code)
+                        except Exception:
+                            pass
+                        
+                        # 格式化主力净流入显示
+                        if main_force_inflow != 0:
+                            main_force_display = f"{main_force_inflow/10000:.1f}"
+                        else:
+                            main_force_display = "-"
+                        
                         results.append({
                             "代码": stock_code,
                             "名称": name,
@@ -981,6 +994,7 @@ class QuantsEngine:
                             "获利筹码": analysis["winner_rate"],
                             "风险评级": analysis["risk_level"],
                             "策略信号": analysis["signals"],
+                            "主力净流入(万)": main_force_display,
                             "综合评级": analysis["action"],
                             "priority": analysis["priority"]
                         })
@@ -1040,6 +1054,19 @@ class QuantsEngine:
                 if analysis:
                     name, industry, _ipo = self._get_basic_info_cached(stock_code)
                     if self.is_valid(stock_code, name):
+                        # 获取主力净流入
+                        main_force_inflow = 0
+                        try:
+                            main_force_inflow = self.get_main_force_net_inflow(stock_code)
+                        except Exception:
+                            pass
+                        
+                        # 格式化主力净流入显示
+                        if main_force_inflow != 0:
+                            main_force_display = f"{main_force_inflow/10000:.1f}"
+                        else:
+                            main_force_display = "-"
+                        
                         results.append({
                             "代码": stock_code,
                             "名称": name,
@@ -1049,6 +1076,7 @@ class QuantsEngine:
                             "获利筹码": analysis["winner_rate"],
                             "风险评级": analysis["risk_level"],
                             "策略信号": analysis["signals"],
+                            "主力净流入(万)": main_force_display,
                             "综合评级": analysis["action"],
                             "priority": analysis["priority"]
                         })
@@ -2747,6 +2775,20 @@ if st.session_state['holdings']:
                         if fig:
                             st.plotly_chart(fig, use_container_width=True)
                             
+                            # 显示主力净流入
+                            main_force_inflow = 0
+                            try:
+                                main_force_inflow = engine.get_main_force_net_inflow(selected_code)
+                            except Exception:
+                                pass
+                            
+                            if main_force_inflow > 0:
+                                main_force_display = f"{main_force_inflow/10000:.1f} 万元"
+                            else:
+                                main_force_display = "暂无数据"
+                            
+                            st.markdown(f"💰 主力净流入：{main_force_display}")
+                            
                             # 在K线图上标注买入价
                             st.info(f"💡 **买入价：¥{buy_price:.2f}** | **当前价：¥{current_price:.2f}** | **盈亏率：{profit_rate:.2f}%**")
                     else:
@@ -2873,6 +2915,21 @@ if st.session_state['valid_options']:
                     fig = engine.plot_professional_kline(df, f"{target_name} - K线图")
                     if fig:
                         st.plotly_chart(fig, use_container_width=True)
+                        
+                        # 显示主力净流入
+                        main_force_inflow = 0
+                        try:
+                            main_force_inflow = engine.get_main_force_net_inflow(target_code)
+                        except Exception:
+                            pass
+                        
+                        if main_force_inflow > 0:
+                            main_force_display = f"{main_force_inflow/10000:.1f} 万元"
+                        else:
+                            main_force_display = "暂无数据"
+                        
+                        st.markdown(f"💰 主力净流入：{main_force_display}")
+                        
                         st.info("""
                         💡 **图例说明**: 
                         - 🔺 **红色"强买"** = 200日均线趋势信号，最强买入信号
