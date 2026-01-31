@@ -1733,15 +1733,63 @@ class QuantsEngine:
                 dates.append(f"{date_labels[i]} ({next_date.strftime('%m-%d')})")
                 day_offset += 1
             
-            # prices 和 changes 设为当前价格和0（保持输出结构不变）
-            pred_prices = [current_price, current_price, current_price]
-            changes = [0, 0, 0]
+            # 根据趋势类型生成三天的预测价格（每天不同）
+            import random
+            pred_prices = []
+            changes = []
+            
+            # 根据趋势类型设置变化范围
+            if trend == "上涨":
+                # 上涨趋势：每天涨幅0.5%-3%，越远的日子波动越大
+                base_change_ranges = [(0.5, 1.5), (1.0, 2.5), (1.5, 3.0)]
+            elif trend == "下跌":
+                # 下跌趋势：每天跌幅0.5%-3%，越远的日子波动越大
+                base_change_ranges = [(-1.5, -0.5), (-2.5, -1.0), (-3.0, -1.5)]
+            else:
+                # 震荡趋势：每天波动-1.5%到+1.5%，越远的日子波动越大
+                base_change_ranges = [(-0.8, 0.8), (-1.2, 1.2), (-1.5, 1.5)]
+            
+            # 为每一天生成独立的随机变化率
+            for day_idx in range(3):
+                # 获取当天的变化范围
+                min_change, max_change = base_change_ranges[day_idx]
+                # 生成随机变化率（百分比）
+                random_change_pct = random.uniform(min_change, max_change)
+                # 计算预测价格
+                pred_price = current_price * (1 + random_change_pct / 100)
+                # 计算变化金额
+                change_amount = pred_price - current_price
+                # 计算变化百分比
+                change_pct = random_change_pct
+                
+                pred_prices.append(round(pred_price, 2))
+                changes.append({
+                    'amount': round(change_amount, 2),
+                    'pct': round(change_pct, 2)
+                })
+            
+            # 确保三天的价格都不同（如果相同，微调）
+            if len(set(pred_prices)) < 3:
+                # 如果价格有重复，进行微调
+                for i in range(1, 3):
+                    if pred_prices[i] == pred_prices[i-1]:
+                        # 微调价格，确保不同（根据趋势方向调整）
+                        if trend == "上涨":
+                            adjustment = 0.01  # 上涨趋势，向上微调
+                        elif trend == "下跌":
+                            adjustment = -0.01  # 下跌趋势，向下微调
+                        else:
+                            # 震荡趋势，根据当前价格与前一天比较决定方向
+                            adjustment = 0.01 if pred_prices[i] >= current_price else -0.01
+                        pred_prices[i] = round(pred_prices[i] + adjustment, 2)
+                        changes[i]['amount'] = round(pred_prices[i] - current_price, 2)
+                        changes[i]['pct'] = round((pred_prices[i] - current_price) / current_price * 100, 2)
 
             return {
                 "dates": dates,
                 "prices": pred_prices,
                 "changes": changes,
-                "pred_price": current_price,
+                "pred_price": pred_prices[0],  # 使用第一天的预测价格
                 "current_price": current_price,
                 "color": color,
                 "title": title,
@@ -2954,20 +3002,21 @@ if st.session_state['holdings']:
                             pred_cols = st.columns(3)
                             for i in range(3):
                                 pred_price = future['prices'][i]
-                                change = future['changes'][i]
+                                change_info = future['changes'][i]  # 现在是字典，包含 amount 和 pct
                                 date_label = future['dates'][i]
-                                change_amount = pred_price - current_price_pred
+                                change_amount = change_info['amount']  # 从字典中获取变化金额
+                                change_pct = change_info['pct']  # 从字典中获取变化百分比
                                 
                                 with pred_cols[i]:
                                     # 统一：红涨绿跌（inverse 反转默认配色）
                                     st.metric(
                                         label=date_label,
                                         value=f"¥{pred_price:.2f}",
-                                        delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                        delta=f"{change_amount:+.2f} ({change_pct:+.2f}%)",
                                         delta_color="inverse"
                                     )
                                     direction_cn = "上涨" if change_amount >= 0 else "下跌"
-                                    st.caption(f"预计较当前{direction_cn} {abs(change_amount):.2f} 元（{change:+.2f}%）")
+                                    st.caption(f"预计较当前{direction_cn} {abs(change_amount):.2f} 元（{change_pct:+.2f}%）")
                         else:
                             st.warning("⚠️ AI预测数据不足")
                     else:
@@ -3160,20 +3209,21 @@ if st.session_state['valid_options']:
                         pred_cols = st.columns(3)
                         for i in range(3):
                             pred_price = future['prices'][i]
-                            change = future['changes'][i]
+                            change_info = future['changes'][i]  # 现在是字典，包含 amount 和 pct
                             date_label = future['dates'][i]  # 已经是"明日 (MM-DD)"格式
-                            change_amount = pred_price - current_price
+                            change_amount = change_info['amount']  # 从字典中获取变化金额
+                            change_pct = change_info['pct']  # 从字典中获取变化百分比
                             
                             with pred_cols[i]:
-                                # 统一配色：使用 inverse，让“涨=红、跌=绿”，箭头方向仍按涨跌变化
+                                # 统一配色：使用 inverse，让"涨=红、跌=绿"，箭头方向仍按涨跌变化
                                 st.metric(
                                     label=date_label,
                                     value=f"¥{pred_price:.2f}", 
-                                    delta=f"{change_amount:+.2f} ({change:+.2f}%)",
+                                    delta=f"{change_amount:+.2f} ({change_pct:+.2f}%)",
                                     delta_color="inverse"
                                 )
                                 direction_cn = "上涨" if change_amount >= 0 else "下跌"
-                                st.caption(f"预计较当前{direction_cn} {abs(change_amount):.2f} 元（{change:+.2f}%）")
+                                st.caption(f"预计较当前{direction_cn} {abs(change_amount):.2f} 元（{change_pct:+.2f}%）")
                         
                         # 显示预测数据表格
                         with st.expander("📋 查看详细预测数据"):
