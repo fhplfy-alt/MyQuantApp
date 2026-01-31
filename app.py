@@ -243,6 +243,19 @@ class QuantsEngine:
         # key: code(str), value: (name, industry, ipoDate)
         self._basic_info_cache = {}
     
+    def safe_bs_login(self, max_retries=3):
+        """安全登录baostock，带重试机制"""
+        for attempt in range(max_retries):
+            try:
+                result = bs.login()
+                if result.error_code == '0':
+                    return True
+            except Exception:
+                pass
+            if attempt < max_retries - 1:
+                time.sleep(0.5)  # 重试前等待0.5秒
+        return False
+    
     def clean_code(self, code):
         code = str(code).strip()
         if not (code.startswith('sh.') or code.startswith('sz.')):
@@ -258,7 +271,8 @@ class QuantsEngine:
     def get_all_stocks(self):
         """修复：确保全场扫描能成功获取数据"""
         try:
-            bs.login() # 显式重新登录
+            if not self.safe_bs_login():
+                return []
             rs = bs.query_all_stock()
             stocks = []
             data_list = []
@@ -343,6 +357,64 @@ class QuantsEngine:
             return upper.iloc[-1], ma.iloc[-1], lower.iloc[-1]
         except:
             return None, None, None
+    
+    def calc_macd(self, df, fast=12, slow=26, signal=9):
+        """计算MACD指标（DIF, DEA, MACD柱）"""
+        try:
+            if len(df) < slow + signal:
+                return None, None, None
+            # 计算EMA
+            ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
+            ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
+            # DIF = EMA12 - EMA26
+            dif = ema_fast - ema_slow
+            # DEA = DIF的9日EMA
+            dea = dif.ewm(span=signal, adjust=False).mean()
+            # MACD柱 = (DIF - DEA) * 2
+            macd_histogram = (dif - dea) * 2
+            return dif.iloc[-1], dea.iloc[-1], macd_histogram.iloc[-1]
+        except:
+            return None, None, None
+    
+    def check_macd_signal(self, df):
+        """检查MACD强势信号：DIF和DEA均在零轴上方，且当日DIF上穿DEA（金叉）"""
+        try:
+            if len(df) < 35:  # 至少需要26+9=35天数据
+                return False
+            dif, dea, _ = self.calc_macd(df)
+            if dif is None or dea is None:
+                return False
+            # 计算前一天的DIF和DEA用于判断金叉
+            if len(df) < 36:
+                return False
+            prev_dif, prev_dea, _ = self.calc_macd(df.iloc[:-1])
+            if prev_dif is None or prev_dea is None:
+                return False
+            # 条件：DIF和DEA均在零轴上方，且当日DIF上穿DEA（金叉）
+            if dif > 0 and dea > 0 and prev_dif <= prev_dea and dif > dea:
+                return True
+            return False
+        except:
+            return False
+    
+    def check_volume_anomaly(self, df):
+        """检查成交量异动信号：当日成交量>过去5日平均成交量的2倍，且收盘价>过去5日最高价（放量突破）"""
+        try:
+            if len(df) < 6:  # 至少需要6天数据（5天用于计算平均值+1天当日）
+                return False
+            curr = df.iloc[-1]
+            # 过去5日平均成交量
+            avg_volume_5d = df['volume'].tail(5).iloc[:-1].mean()  # 排除当日，取前5日
+            if avg_volume_5d <= 0:
+                return False
+            # 过去5日最高价（排除当日）
+            max_high_5d = df['high'].tail(5).iloc[:-1].max()
+            # 条件：当日成交量>过去5日平均成交量的2倍，且收盘价>过去5日最高价
+            if curr['volume'] > avg_volume_5d * 2 and curr['close'] > max_high_5d:
+                return True
+            return False
+        except:
+            return False
 
     def _process_single_stock(self, code, max_price=None, realtime_data_cache=None, price_map=None):
         """处理单只股票的策略分析
@@ -515,6 +587,20 @@ class QuantsEngine:
             if action == "WAIT (观望)":
                 action = "HOLD (持有)"
 
+        # MACD强势信号
+        if self.check_macd_signal(df):
+            signal_tags.append("📊 MACD强势")
+            priority = max(priority, 80)
+            if action in ["WAIT (观望)", "HOLD (持有)", "BUY (低吸)"]:
+                action = "BUY (博弈)" if action == "WAIT (观望)" else action
+
+        # 成交量异动信号
+        if self.check_volume_anomaly(df):
+            signal_tags.append("💥 量能异动")
+            priority = max(priority, 75)
+            if action in ["WAIT (观望)", "HOLD (持有)"]:
+                action = "BUY (博弈)"
+
         if priority == 0:
             return None
 
@@ -580,7 +666,9 @@ class QuantsEngine:
         """
         # 保持原有的进度条逻辑，增加命中数量显示，优化进度显示
         results, alerts, valid_codes_list = [], [], []
-        bs.login()
+        if not self.safe_bs_login():
+            st.error("❌ baostock登录失败，无法进行扫描")
+            return [], [], []
         total = len(code_list)
         progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total}) | 命中: 0 只")
         
@@ -599,61 +687,12 @@ class QuantsEngine:
         
         try:
             realtime_data_cache = _fetch_spot_em_with_timeout()
-            # 如果成功获取实时数据，预处理建立价格映射表（优化性能）
+            # 如果成功获取实时数据，使用快速方法建立价格映射表
             if realtime_data_cache is not None and not realtime_data_cache.empty:
                 code_column, price_column = self._detect_realtime_columns(realtime_data_cache)
                 if code_column and price_column:
-                    # 预处理：为所有待扫描的代码建立价格映射
-                    code_series = realtime_data_cache[code_column].astype(str).str.strip()
-                    code_normalized = code_series.str.replace('sh', '', regex=False).str.replace('sz', '', regex=False).str.replace('.', '', regex=False).str.strip()
-                    
-                    # 性能优化：使用pandas向量化操作批量建立映射，大幅提升速度
-                    # 为所有待扫描代码预处理标准化格式
-                    code_mapping = {}  # 存储原始代码到标准化代码的映射
-                    target_codes_set = set()  # 用于批量匹配
-                    
-                    for code in code_list:
-                        clean_code = self.clean_code(code)
-                        target_code = self._normalize_stock_code(clean_code)
-                        code_mapping[target_code] = code
-                        target_codes_set.add(target_code)
-                        
-                    # 批量匹配：优先使用精确匹配（最快）
-                    for target_code in target_codes_set:
-                        # 策略1: 精确匹配（最快）
-                        mask = code_series == target_code
-                        if not mask.any():
-                            # 策略2: 标准化后匹配
-                            mask = code_normalized == target_code
-                        if not mask.any() and target_code.isdigit():
-                            # 策略3: 去除前导零匹配
-                            target_no_zero = target_code.lstrip('0')
-                            if target_no_zero and len(target_no_zero) >= 1:
-                                mask = code_normalized == target_no_zero
-                        
-                        if mask.any():
-                            try:
-                                price = float(realtime_data_cache[mask].iloc[0][price_column])
-                                if price > 0 and price < 1e10:
-                                    original_code = code_mapping[target_code]
-                                    price_map[original_code] = price
-                            except (ValueError, KeyError, IndexError):
-                                pass
-                    
-                    # 对于未匹配到的代码，尝试包含匹配（较慢，但作为备选）
-                    unmatched_codes = [code for code in code_list if code not in price_map]
-                    if unmatched_codes:
-                        for code in unmatched_codes:
-                            clean_code = self.clean_code(code)
-                            target_code = self._normalize_stock_code(clean_code)
-                            mask = code_series.str.contains(target_code, na=False, regex=False)
-                            if mask.any():
-                                try:
-                                    price = float(realtime_data_cache[mask].iloc[0][price_column])
-                                    if price > 0 and price < 1e10:
-                                        price_map[code] = price
-                                except (ValueError, KeyError, IndexError):
-                                    pass
+                    # 使用快速方法建立价格映射
+                    price_map = self._build_price_map_fast(code_list, realtime_data_cache, code_column, price_column)
         except Exception:
             # 如果获取失败，继续使用历史数据，不影响扫描
             pass
@@ -873,6 +912,64 @@ class QuantsEngine:
                 code_clean = code_clean[-6:]
         
         return code_clean
+    
+    def _build_price_map_fast(self, code_list, realtime_df, code_col, price_col):
+        """快速构建价格映射表（优化版本，替代循环匹配）
+        
+        Args:
+            code_list: 待匹配的股票代码列表
+            realtime_df: 实时行情DataFrame
+            code_col: 代码列名
+            price_col: 价格列名
+            
+        Returns:
+            dict: {原始代码（clean后）: 价格} 字典
+        """
+        if realtime_df is None or realtime_df.empty or code_col not in realtime_df.columns or price_col not in realtime_df.columns:
+            return {}
+        
+        price_map = {}
+        
+        try:
+            # 标准化实时数据中的代码为6位纯数字
+            code_series = realtime_df[code_col].astype(str).str.strip()
+            # 去除字母、点号等，只保留数字，并补零到6位
+            normalized_codes = (
+                code_series
+                .str.replace('sh', '', regex=False)
+                .str.replace('sz', '', regex=False)
+                .str.replace('.', '', regex=False)
+                .str.replace(r'[^0-9]', '', regex=True)
+                .str.strip()
+            )
+            # 补零到6位
+            normalized_codes = normalized_codes.apply(lambda x: x.zfill(6) if x.isdigit() and len(x) <= 6 else (x[-6:] if x.isdigit() and len(x) > 6 else ''))
+            
+            # 构建标准化代码到价格的映射字典
+            normalized_price_map = {}
+            for idx, norm_code in enumerate(normalized_codes):
+                if norm_code and norm_code.isdigit() and len(norm_code) == 6:
+                    try:
+                        price = float(realtime_df.iloc[idx][price_col])
+                        if price > 0 and price < 1e10:
+                            # 如果同一个标准化代码出现多次，保留第一个有效价格
+                            if norm_code not in normalized_price_map:
+                                normalized_price_map[norm_code] = price
+                    except (ValueError, KeyError, IndexError):
+                        pass
+            
+            # 对code_list中每个代码进行匹配
+            for code in code_list:
+                clean_code = self.clean_code(code)
+                target_code = self._normalize_stock_code(clean_code)
+                
+                # 从映射中查找价格
+                if target_code in normalized_price_map:
+                    price_map[clean_code] = normalized_price_map[target_code]
+        except Exception:
+            pass
+        
+        return price_map
     
     def _get_price_from_dataframe(self, df_realtime, target_code, clean_code):
         """从DataFrame中提取价格（通用方法，支持多种数据源格式）
@@ -1314,7 +1411,8 @@ class QuantsEngine:
     def get_deep_data(self, code):
         """修复白屏的关键：增加严谨的数据校验"""
         try:
-            bs.login()
+            if not self.safe_bs_login():
+                return None
             end = datetime.datetime.now().strftime("%Y-%m-%d")
             start = (datetime.datetime.now() - datetime.timedelta(days=180)).strftime("%Y-%m-%d")
             rs = bs.query_history_k_data_plus(code, "date,open,close,high,low,volume", start_date=start, end_date=end, frequency="d", adjustflag="3")
@@ -1328,26 +1426,53 @@ class QuantsEngine:
         except: return None
 
     def run_ai_prediction(self, df):
-        """增强版AI预测：预估后三天股票走势，包括价格、涨跌幅等"""
+        """技术面趋势推演：根据技术指标判断未来趋势方向"""
         if df is None or len(df) < 30: return None
         try:
-            # 使用更多历史数据提高预测准确性
-            recent = df.tail(30).reset_index(drop=True)
-            X = np.array(recent.index).reshape(-1, 1)
-            y = recent['close'].values
-            
-            # 训练模型
-            model = LinearRegression().fit(X, y)
-            
-            # 预测后三天价格
-            next_indices = np.array([[len(recent)], [len(recent)+1], [len(recent)+2]])
-            pred_prices = model.predict(next_indices)
-            
             # 计算当前价格
             current_price = df['close'].iloc[-1]
             
-            # 计算涨跌幅
-            changes = [(p - current_price) / current_price * 100 for p in pred_prices]
+            # 计算技术指标
+            df['MA5'] = df['close'].rolling(5).mean()
+            df['MA20'] = df['close'].rolling(20).mean()
+            rsi = self.calc_rsi(df)
+            
+            # 计算近3日涨跌幅
+            if len(df) >= 3:
+                recent_3d_change = ((df['close'].iloc[-1] - df['close'].iloc[-4]) / df['close'].iloc[-4]) * 100
+            else:
+                recent_3d_change = 0
+            
+            # 获取当前MA5和MA20值
+            ma5_current = df['MA5'].iloc[-1] if not pd.isna(df['MA5'].iloc[-1]) else None
+            ma20_current = df['MA20'].iloc[-1] if not pd.isna(df['MA20'].iloc[-1]) else None
+            
+            # 判断趋势
+            trend = "震荡"
+            color = "blue"
+            title = "📊 技术推演：震荡趋势"
+            desc = "技术指标显示当前处于震荡整理状态"
+            action = "建议持有观望，等待明确方向"
+            
+            # 上涨趋势条件：RSI > 50 + MA5 > MA20 + 近3日涨幅 > 5%
+            if (rsi is not None and rsi > 50 and 
+                ma5_current is not None and ma20_current is not None and ma5_current > ma20_current and
+                recent_3d_change > 5):
+                trend = "上涨"
+                color = "red"
+                title = "📊 技术推演：上涨趋势"
+                desc = f"RSI处于强势区间({rsi:.1f})，均线多头排列，近3日涨幅{recent_3d_change:.2f}%，技术面偏强"
+                action = "建议持有或逢低买入，关注突破信号"
+            
+            # 下跌趋势条件：RSI < 40 + MA5 < MA20 + 近3日跌幅 > 3%
+            elif (rsi is not None and rsi < 40 and 
+                  ma5_current is not None and ma20_current is not None and ma5_current < ma20_current and
+                  recent_3d_change < -3):
+                trend = "下跌"
+                color = "green"
+                title = "📊 技术推演：下跌趋势"
+                desc = f"RSI处于弱势区间({rsi:.1f})，均线空头排列，近3日跌幅{abs(recent_3d_change):.2f}%，技术面偏弱"
+                action = "建议谨慎观望或减仓，注意风险控制"
             
             # 生成日期（后三天）：明日/后日/大后日
             last_date = pd.to_datetime(df['date'].iloc[-1])
@@ -1362,29 +1487,15 @@ class QuantsEngine:
                 dates.append(f"{date_labels[i]} ({next_date.strftime('%m-%d')})")
                 day_offset += 1
             
-            # 判断趋势（颜色：红色=上涨，绿色=下跌，蓝色=横盘）
-            avg_change = np.mean(changes)
-            if avg_change > 2:
-                color = "red"  # 红色=预测上涨
-                title = "📈 AI预测：上涨趋势"
-                desc = f"预计未来三天平均涨幅 {avg_change:.2f}%"
-                action = "建议持有或逢低买入"
-            elif avg_change < -2:
-                color = "green"  # 绿色=预测下跌
-                title = "📉 AI预测：下跌趋势"
-                desc = f"预计未来三天平均跌幅 {abs(avg_change):.2f}%"
-                action = "建议谨慎观望或减仓"
-            else:
-                color = "blue"  # 蓝色=预测横盘
-                title = "➡️ AI预测：震荡整理"
-                desc = f"预计未来三天波动较小，平均变化 {abs(avg_change):.2f}%"
-                action = "建议持有观望"
+            # prices 和 changes 设为当前价格和0（保持输出结构不变）
+            pred_prices = [current_price, current_price, current_price]
+            changes = [0, 0, 0]
 
             return {
                 "dates": dates,
-                "prices": pred_prices.tolist(),
+                "prices": pred_prices,
                 "changes": changes,
-                "pred_price": pred_prices[0],
+                "pred_price": current_price,
                 "current_price": current_price,
                 "color": color,
                 "title": title,
