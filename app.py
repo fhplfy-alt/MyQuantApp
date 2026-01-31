@@ -2852,6 +2852,10 @@ if st.session_state['scan_res']:
     alert_set = set(st.session_state.get('alerts', []) or [])
     df_scan['主力标记'] = df_scan['名称'].apply(lambda x: "🔥" if x in alert_set else "")
     
+    # 调整列顺序，确保"主力标记"列显示在最后
+    columns_order = [col for col in df_scan.columns if col != '主力标记'] + ['主力标记']
+    df_scan = df_scan[columns_order]
+    
     # 显示命中股票数量
     total_count = len(df_scan)
     st.success(f"✅ **扫描完成！共命中 {total_count} 只符合条件的股票**")
