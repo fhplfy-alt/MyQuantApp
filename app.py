@@ -2000,6 +2000,7 @@ engine = QuantsEngine()
 if 'full_pool' not in st.session_state: st.session_state['full_pool'] = []
 if 'scan_res' not in st.session_state: st.session_state['scan_res'] = []
 if 'valid_options' not in st.session_state: st.session_state['valid_options'] = []
+if 'watchlist' not in st.session_state: st.session_state['watchlist'] = []
 
 # 持仓数据持久化存储（按用户隔离）
 def get_holdings_file():
@@ -2135,6 +2136,54 @@ if st.session_state['holdings']:
 else:
     st.sidebar.info("💡 暂无持仓，点击上方添加")
 
+# 我的关注列表功能
+st.sidebar.markdown("---")
+st.sidebar.subheader("⭐ 我的关注")
+
+# 显示关注列表
+if st.session_state.get('watchlist'):
+    watchlist_count = len(st.session_state['watchlist'])
+    st.sidebar.info(f"📋 已关注 {watchlist_count} 只股票")
+    
+    # 更新按钮
+    if st.sidebar.button("🔄 更新价格和资金", key="update_watchlist"):
+        with st.sidebar.spinner("正在更新..."):
+            for item in st.session_state['watchlist']:
+                code = item.get('代码', '')
+                if code:
+                    try:
+                        # 更新当前价格
+                        current_price = engine.get_current_price(code)
+                        if current_price:
+                            item['当前价格'] = f"{current_price:.2f}"
+                        # 更新主力净流入
+                        main_force = engine.get_main_force_net_inflow(code)
+                        if main_force and not pd.isna(main_force) and main_force > 0:
+                            item['主力净流入(万)'] = f"{main_force/10000:.1f}"
+                        else:
+                            item['主力净流入(万)'] = "-"
+                    except Exception:
+                        pass
+            st.sidebar.success("✅ 更新完成")
+    
+    # 显示关注列表
+    for i, item in enumerate(st.session_state['watchlist']):
+        code = item.get('代码', 'N/A')
+        name = item.get('名称', 'N/A')
+        with st.sidebar.expander(f"{code} | {name}", expanded=False):
+            st.write(f"**代码**: {code}")
+            st.write(f"**名称**: {name}")
+            st.write(f"**当前价格**: {item.get('当前价格', '未更新')}")
+            st.write(f"**主力净流入**: {item.get('主力净流入(万)', 'N/A')}")
+            st.write(f"**策略信号**: {item.get('策略信号', 'N/A')}")
+            st.write(f"**综合评级**: {item.get('综合评级', 'N/A')}")
+            st.write(f"**添加时间**: {item.get('添加时间', 'N/A')}")
+            if st.button("🗑️ 移除", key=f"remove_watch_{i}"):
+                st.session_state['watchlist'].pop(i)
+                st.rerun()
+else:
+    st.sidebar.info("💡 暂无关注股票，在扫描结果中点击 ⭐ 关注 按钮添加")
+
 # 导出Excel功能（放在sidebar中，确保显示）
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 导出功能")
@@ -2222,13 +2271,98 @@ else:
 # ==========================================
 # 如果是管理员，显示管理功能选项
 show_admin = False
+show_watchlist = False
+
 if check_admin_access():
-    main_tabs = st.tabs(["📊 量化分析", "👨‍💼 管理后台"])
-    if main_tabs[1]:  # 如果点击了管理后台标签
+    main_tabs = st.tabs(["📊 量化分析", "⭐ 我的关注", "👨‍💼 管理后台"])
+    if main_tabs[1]:  # 如果点击了"我的关注"标签
+        show_watchlist = True
+    elif main_tabs[2]:  # 如果点击了管理后台标签
         show_admin = True
+else:
+    main_tabs = st.tabs(["📊 量化分析", "⭐ 我的关注"])
+    if main_tabs[1]:  # 如果点击了"我的关注"标签
+        show_watchlist = True
 
 # 根据选择的标签页显示内容
-if show_admin:
+if show_watchlist:
+    # ==========================================
+    # 我的关注页面
+    # ==========================================
+    st.title("⭐ 我的关注列表")
+    st.caption("管理您关注的股票，实时查看价格和资金流向")
+    
+    if st.session_state.get('watchlist'):
+        watchlist_count = len(st.session_state['watchlist'])
+        st.success(f"📋 您已关注 {watchlist_count} 只股票")
+        
+        # 更新按钮
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("🔄 更新所有数据", type="primary"):
+                with st.spinner("正在更新价格和资金流向..."):
+                    for item in st.session_state['watchlist']:
+                        code = item.get('代码', '')
+                        if code:
+                            try:
+                                # 更新当前价格
+                                current_price = engine.get_current_price(code)
+                                if current_price:
+                                    item['当前价格'] = f"{current_price:.2f}"
+                                # 更新主力净流入
+                                main_force = engine.get_main_force_net_inflow(code)
+                                if main_force and not pd.isna(main_force) and main_force > 0:
+                                    item['主力净流入(万)'] = f"{main_force/10000:.1f}"
+                                else:
+                                    item['主力净流入(万)'] = "-"
+                            except Exception:
+                                pass
+                    st.success("✅ 更新完成")
+                    st.rerun()
+        
+        # 显示关注列表表格
+        watchlist_data = []
+        for item in st.session_state['watchlist']:
+            watchlist_data.append({
+                '代码': item.get('代码', 'N/A'),
+                '名称': item.get('名称', 'N/A'),
+                '当前价格': item.get('当前价格', '未更新'),
+                '主力净流入(万)': item.get('主力净流入(万)', 'N/A'),
+                '策略信号': item.get('策略信号', 'N/A'),
+                '综合评级': item.get('综合评级', 'N/A'),
+                '添加时间': item.get('添加时间', 'N/A')
+            })
+        
+        if watchlist_data:
+            df_watchlist = pd.DataFrame(watchlist_data)
+            st.dataframe(df_watchlist, hide_index=True, use_container_width=True)
+        
+        # 移除按钮
+        st.markdown("---")
+        st.markdown("### 🗑️ 移除关注")
+        for i, item in enumerate(st.session_state['watchlist']):
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                st.write(f"**{item.get('代码', 'N/A')}** | {item.get('名称', 'N/A')}")
+            with col2:
+                st.write(f"主力: {item.get('主力净流入(万)', 'N/A')}")
+            with col3:
+                if st.button("🗑️ 移除", key=f"remove_watch_main_{i}"):
+                    removed_name = item.get('名称', 'N/A')
+                    st.session_state['watchlist'].pop(i)
+                    st.success(f"✅ 已移除 {removed_name}")
+                    st.rerun()
+    else:
+        st.info("💡 您还没有关注任何股票。在扫描结果中点击 ⭐ 关注 按钮添加股票到关注列表。")
+        st.markdown("""
+        ### 📝 使用说明：
+        1. 在左侧边栏点击 "🚀 启动全策略扫描" 进行股票扫描
+        2. 扫描完成后，在扫描结果下方的 "⭐ 快速关注" 区域点击关注按钮
+        3. 已关注的股票会显示在 "⭐ 我的关注" 标签页中
+        4. 可以随时更新价格和资金流向数据
+        """)
+
+elif show_admin:
     # ==========================================
     # 管理后台功能
     # ==========================================
@@ -2902,6 +3036,43 @@ if st.session_state['scan_res']:
     }
     
     st.dataframe(df_scan, hide_index=True, column_config=column_config)
+    
+    # 添加关注按钮（在表格下方，使用紧凑布局）
+    st.markdown("---")
+    st.markdown("### ⭐ 快速关注")
+    
+    # 使用更紧凑的方式显示关注按钮
+    watchlist_codes = {w.get('代码') for w in st.session_state.get('watchlist', [])}
+    
+    # 每行显示3个按钮
+    rows_per_line = 3
+    for i in range(0, len(df_scan), rows_per_line):
+        cols = st.columns(rows_per_line)
+        for j, col in enumerate(cols):
+            if i + j < len(df_scan):
+                row = df_scan.iloc[i + j]
+                code = row['代码']
+                name = row['名称']
+                is_watched = code in watchlist_codes
+                
+                with col:
+                    if is_watched:
+                        st.button("✅ 已关注", key=f"watch_btn_{i+j}", disabled=True, use_container_width=True)
+                    else:
+                        if st.button(f"⭐ {name[:8]}", key=f"watch_btn_{i+j}", use_container_width=True):
+                            # 添加到关注列表
+                            watch_item = {
+                                '代码': code,
+                                '名称': name,
+                                '主力净流入(万)': row.get('主力净流入(万)', '-'),
+                                '策略信号': row.get('策略信号', '-'),
+                                '综合评级': row.get('综合评级', '-'),
+                                'priority': row.get('priority', 0),
+                                '添加时间': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                            st.session_state['watchlist'].append(watch_item)
+                            st.success(f"✅ 已添加 {name} 到关注列表")
+                            st.rerun()
 
 # 深度分析 (增强版)
 if st.session_state['valid_options']:
