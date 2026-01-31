@@ -973,17 +973,17 @@ class QuantsEngine:
                     name, industry, _ipo = self._get_basic_info_cached(stock_code)
                     if self.is_valid(stock_code, name):
                         # 获取主力净流入
-                        main_force_inflow = 0
+                        main_force_inflow = None
                         try:
                             main_force_inflow = self.get_main_force_net_inflow(stock_code)
                         except Exception:
-                            pass
+                            main_force_inflow = None
                         
-                        # 格式化主力净流入显示
-                        if main_force_inflow != 0:
-                            main_force_display = f"{main_force_inflow/10000:.1f}"
-                        else:
+                        # 格式化主力净流入显示：使用 pd.isna() 检查是否为 None 或 NaN
+                        if pd.isna(main_force_inflow) or main_force_inflow <= 0:
                             main_force_display = "-"
+                        else:
+                            main_force_display = f"{main_force_inflow/10000:.1f}"
                         
                         results.append({
                             "代码": stock_code,
@@ -1055,17 +1055,17 @@ class QuantsEngine:
                     name, industry, _ipo = self._get_basic_info_cached(stock_code)
                     if self.is_valid(stock_code, name):
                         # 获取主力净流入
-                        main_force_inflow = 0
+                        main_force_inflow = None
                         try:
                             main_force_inflow = self.get_main_force_net_inflow(stock_code)
                         except Exception:
-                            pass
+                            main_force_inflow = None
                         
-                        # 格式化主力净流入显示
-                        if main_force_inflow != 0:
-                            main_force_display = f"{main_force_inflow/10000:.1f}"
-                        else:
+                        # 格式化主力净流入显示：使用 pd.isna() 检查是否为 None 或 NaN
+                        if pd.isna(main_force_inflow) or main_force_inflow <= 0:
                             main_force_display = "-"
+                        else:
+                            main_force_display = f"{main_force_inflow/10000:.1f}"
                         
                         results.append({
                             "代码": stock_code,
