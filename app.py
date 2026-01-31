@@ -436,6 +436,155 @@ class QuantsEngine:
             return near_high and low_volume
         except:
             return False  # 异常时默认不过滤（安全优先）
+    
+    def get_hot_concept_stocks(self, top_n=10):
+        """获取当日热门概念板块中的股票
+        
+        Args:
+            top_n: 获取前N个热门概念板块，默认10个
+            
+        Returns:
+            list: 股票代码列表，如果失败则返回空列表
+        """
+        try:
+            # 获取概念板块列表
+            concept_df = ak.stock_board_concept_em()
+            if concept_df is None or concept_df.empty:
+                return []
+            
+            # 按涨跌幅排序，取前top_n个热门概念
+            if '涨跌幅' in concept_df.columns:
+                concept_df = concept_df.sort_values('涨跌幅', ascending=False)
+            elif '涨跌' in concept_df.columns:
+                concept_df = concept_df.sort_values('涨跌', ascending=False)
+            
+            top_concepts = concept_df.head(top_n)
+            
+            # 收集所有概念板块中的股票代码
+            all_stocks = set()
+            for idx, row in top_concepts.iterrows():
+                try:
+                    concept_name = row.get('板块名称', '') or row.get('名称', '')
+                    if not concept_name:
+                        continue
+                    
+                    # 获取该概念板块的成分股
+                    cons_df = ak.stock_board_concept_cons_em(symbol=concept_name)
+                    if cons_df is not None and not cons_df.empty:
+                        # 提取股票代码列
+                        code_col = None
+                        for col in ['代码', '股票代码', 'code', 'symbol']:
+                            if col in cons_df.columns:
+                                code_col = col
+                                break
+                        
+                        if code_col:
+                            for code in cons_df[code_col]:
+                                if pd.notna(code) and code:
+                                    # 标准化代码格式
+                                    clean_code = self.clean_code(str(code).strip())
+                                    all_stocks.add(clean_code)
+                except Exception:
+                    continue
+            
+            return list(all_stocks)
+        except Exception:
+            return []  # 网络请求失败时返回空列表，自动回退到全市场扫描
+    
+    def get_hot_concepts(self, top_n=8):
+        """获取当日热门概念板块名称列表
+        
+        Args:
+            top_n: 获取前N个热门概念板块，默认8个
+            
+        Returns:
+            list: 概念板块名称列表，如果失败则返回空列表
+        """
+        try:
+            # 获取概念板块列表
+            concept_df = ak.stock_board_concept_em()
+            if concept_df is None or concept_df.empty:
+                return []
+            
+            # 按涨跌幅排序，取前top_n个热门概念
+            if '涨跌幅' in concept_df.columns:
+                concept_df = concept_df.sort_values('涨跌幅', ascending=False)
+            elif '涨跌' in concept_df.columns:
+                concept_df = concept_df.sort_values('涨跌', ascending=False)
+            
+            top_concepts = concept_df.head(top_n)
+            
+            # 提取概念板块名称
+            concept_names = []
+            for idx, row in top_concepts.iterrows():
+                concept_name = row.get('板块名称', '') or row.get('名称', '')
+                if concept_name:
+                    concept_names.append(concept_name)
+            
+            return concept_names
+        except Exception:
+            return []  # 网络请求失败时返回空列表
+    
+    def get_stocks_in_concept(self, concept_name):
+        """获取指定概念板块中的股票代码列表
+        
+        Args:
+            concept_name: 概念板块名称
+            
+        Returns:
+            list: 股票代码列表（原始格式，未clean），如果失败则返回空列表
+        """
+        try:
+            # 获取该概念板块的成分股
+            cons_df = ak.stock_board_concept_cons_em(symbol=concept_name)
+            if cons_df is None or cons_df.empty:
+                return []
+            
+            # 提取股票代码列
+            code_col = None
+            for col in ['代码', '股票代码', 'code', 'symbol']:
+                if col in cons_df.columns:
+                    code_col = col
+                    break
+            
+            if code_col:
+                stocks = []
+                for code in cons_df[code_col]:
+                    if pd.notna(code) and code:
+                        stocks.append(str(code).strip())
+                return stocks
+            
+            return []
+        except Exception:
+            return []  # 获取失败时返回空列表
+    
+    def get_main_force_net_inflow(self, code):
+        """获取股票的主力资金净流入（单位：元）
+        
+        Args:
+            code: 股票代码（已clean格式，如 'sh.600000' 或 'sz.000001'）
+            
+        Returns:
+            float: 主力资金净流入（元），如果获取失败返回0
+        """
+        try:
+            # code 是 clean_code 后的格式，如 'sh.600000' 或 'sz.000001'
+            # 需要提取6位数字代码
+            code_str = str(code).replace('sh.', '').replace('sz.', '').strip()
+            
+            # 转换为 akshare 需要的格式：'600000' -> 'sh600000'
+            if code_str.startswith(('60', '68')):
+                ak_symbol = f"sh{code_str}"
+            else:
+                ak_symbol = f"sz{code_str}"
+            
+            df = ak.stock_individual_fund_flow(symbol=ak_symbol)
+            if df is not None and not df.empty:
+                net_inflow = pd.to_numeric(df['主力净流入'].iloc[0], errors='coerce')
+                return net_inflow if pd.notna(net_inflow) else 0
+        except Exception as e:
+            print(f"获取主力资金流失败 ({code}): {e}")
+        return 0
 
     def _process_single_stock(self, code, max_price=None, realtime_data_cache=None, price_map=None):
         """处理单只股票的策略分析
@@ -572,20 +721,29 @@ class QuantsEngine:
         if (all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62):
             signal_tags.append("🔴温和吸筹"); priority = 60; action = "BUY (低吸)"
 
+        # 获取主力资金净流入（用于激进信号过滤，单位：元）
+        main_force_inflow = 0
+        try:
+            main_force_inflow = self.get_main_force_net_inflow(code)
+        except Exception:
+            pass  # 获取失败时不影响其他逻辑，默认为0
+        
         if all(df['turn'].tail(2) > 5) and winner_rate > 70:
-            signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
+            # 激进信号：🔥换手锁仓 - 需要主力资金净流入 > 1000万元（10000000元）
+            if main_force_inflow > 10000000:
+                signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
 
-        # 激进信号：🐲妖股基因 - 需要放量确认
+        # 激进信号：🐲妖股基因 - 需要放量确认 + 主力资金净流入 > 1000万元（10000000元）
         if len(df.tail(60)[df.tail(60)['pctChg'] > 9.5]) >= 3 and winner_rate > 80:
-            if has_volume_confirmation:
+            if has_volume_confirmation and main_force_inflow > 10000000:
                 signal_tags.append("🐲妖股基因"); priority = 90; action = "STRONG BUY"
 
         recent_20 = df.tail(20)
         has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
         is_double_vol = (curr['volume'] > prev['volume'] * 1.8)
-        # 激进信号：👑四星共振 - 需要放量确认（is_double_vol 已经包含放量判断，但额外要求 has_volume_confirmation）
+        # 激进信号：👑四星共振 - 需要放量确认 + 主力资金净流入 > 1000万元（10000000元）
         if has_limit_up_20 and is_double_vol:
-            if has_volume_confirmation:
+            if has_volume_confirmation and main_force_inflow > 10000000:
                 signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
         
         if rsi is not None and len(df) >= 2:
@@ -703,7 +861,27 @@ class QuantsEngine:
         1. 在扫描前预处理代码格式，建立价格映射表（如果实时数据可用）
         2. 减少重复的代码格式化和匹配操作
         3. 保持原有功能和进度显示逻辑不变
+        4. 新增：优先扫描热门概念板块股票
         """
+        # === 应用热点板块过滤 ===
+        try:
+            hot_concept_stocks = self.get_hot_concepts(top_n=8)
+            if hot_concept_stocks and len(hot_concept_stocks) > 0:
+                original_set = set(code_list)
+                hot_set = set()
+                for concept in hot_concept_stocks:
+                    hot_set.update(self.get_stocks_in_concept(concept))
+                # 标准化 hot_set 为 clean_code 格式
+                hot_set_clean = {self.clean_code(c) for c in hot_set}
+                filtered_list = list(original_set & hot_set_clean)
+                if filtered_list:
+                    code_list = filtered_list
+                    st.info(f"🔥 已过滤到热门概念板块股票：{len(code_list)} 只")
+        except Exception:
+            # 网络请求失败时自动回退到全市场扫描
+            pass
+        # =======================
+        
         # 保持原有的进度条逻辑，增加命中数量显示，优化进度显示
         results, alerts, valid_codes_list = [], [], []
         if not self.safe_bs_login():
