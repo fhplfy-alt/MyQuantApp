@@ -415,6 +415,27 @@ class QuantsEngine:
             return False
         except:
             return False
+    
+    def is_high_position_risk(self, df):
+        """判断股票是否处于高位且缩量，可能存在主力出货风险"""
+        if df is None or len(df) < 60:
+            return False
+        
+        try:
+            close = df['close'].iloc[-1]
+            high_60 = df['high'].rolling(window=60, min_periods=1).max().iloc[-1]
+            
+            # 条件1：股价接近60日高点（>90%）
+            near_high = close > high_60 * 0.9
+            
+            # 条件2：当前成交量 < 5日均量的60%（明显缩量）
+            vol = df['volume'].iloc[-1]
+            vol_ma5 = df['volume'].rolling(window=5, min_periods=1).mean().iloc[-1]
+            low_volume = vol < vol_ma5 * 0.6
+            
+            return near_high and low_volume
+        except:
+            return False  # 异常时默认不过滤（安全优先）
 
     def _process_single_stock(self, code, max_price=None, realtime_data_cache=None, price_map=None):
         """处理单只股票的策略分析
@@ -520,6 +541,13 @@ class QuantsEngine:
         curr = df.iloc[-1]
         prev = df.iloc[-2]
 
+        # 过滤器1：检查是否处于高位缩量风险（在计算信号前过滤）
+        try:
+            if self.is_high_position_risk(df):
+                return None  # 跳过该股票
+        except:
+            pass  # 异常时默认不过滤（安全优先）
+
         winner_rate = self.calc_winner_rate(df, curr['close'])
         df['MA5'] = df['close'].rolling(5).mean()
         df['MA20'] = df['close'].rolling(20).mean()
@@ -532,6 +560,14 @@ class QuantsEngine:
 
         signal_tags, priority, action = [], 0, "WAIT (观望)"
 
+        # 计算放量确认条件（用于增强激进信号可信度）
+        try:
+            vol_today = df['volume'].iloc[-1]
+            vol_ma5 = df['volume'].rolling(5).mean().iloc[-2] if len(df) >= 6 else 0
+            has_volume_confirmation = vol_today > vol_ma5 * 1.5 if vol_ma5 > 0 else False
+        except:
+            has_volume_confirmation = False  # 异常时默认不要求放量确认（安全优先）
+
         # 原有策略保留（保持原功能不变）
         if (all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62):
             signal_tags.append("🔴温和吸筹"); priority = 60; action = "BUY (低吸)"
@@ -539,14 +575,18 @@ class QuantsEngine:
         if all(df['turn'].tail(2) > 5) and winner_rate > 70:
             signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
 
+        # 激进信号：🐲妖股基因 - 需要放量确认
         if len(df.tail(60)[df.tail(60)['pctChg'] > 9.5]) >= 3 and winner_rate > 80:
-            signal_tags.append("🐲妖股基因"); priority = 90; action = "STRONG BUY"
+            if has_volume_confirmation:
+                signal_tags.append("🐲妖股基因"); priority = 90; action = "STRONG BUY"
 
         recent_20 = df.tail(20)
         has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
         is_double_vol = (curr['volume'] > prev['volume'] * 1.8)
+        # 激进信号：👑四星共振 - 需要放量确认（is_double_vol 已经包含放量判断，但额外要求 has_volume_confirmation）
         if has_limit_up_20 and is_double_vol:
-            signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
+            if has_volume_confirmation:
+                signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
         
         if rsi is not None and len(df) >= 2:
             prev_rsi = self.calc_rsi(df.iloc[:-1])
