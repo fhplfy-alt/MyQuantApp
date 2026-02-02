@@ -211,6 +211,20 @@ ACTION_TIP = """
 ⬜ WAIT: 【观望】无机会
 """
 
+def is_after_close_time():
+    """判断当前是否为盘后时间（用于控制价格显示来源）
+    
+    说明：
+    - 仅用于 UI 层“现价”展示，不参与任何策略或决策逻辑
+    - 当时间 >= 15:00 视为盘后，统一使用当日收盘价
+    """
+    try:
+        now = datetime.datetime.now().time()
+        return now >= datetime.time(15, 0)
+    except Exception:
+        # 异常情况下默认按盘中处理，保持与原逻辑一致
+        return False
+
 def map_action_to_display(action):
     """将后端action字段映射为前端显示文案（仅用于UI展示，不改变后端数据）"""
     if action == "STRONG BUY":
@@ -906,28 +920,35 @@ class QuantsEngine:
         
         # 在扫描开始时，尝试获取一次实时行情数据（用于优化扫描过程中的价格获取）
         # 增加超时保护，避免第三方行情接口卡死导致整体扫描长时间停滞
+        # 注意：仅在盘中模式才拉取实时行情；盘后统一使用当日收盘价
         realtime_data_cache = None
         price_map = {}  # 代码到价格的映射表，用于快速查找
 
-        def _fetch_spot_em_with_timeout(timeout_seconds=6):
+        after_close = is_after_close_time()
+
+        if not after_close:
+            def _fetch_spot_em_with_timeout(timeout_seconds=6):
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as tmp_exec:
+                        fut = tmp_exec.submit(ak.stock_zh_a_spot_em)
+                        return fut.result(timeout=timeout_seconds)
+                except Exception:
+                    return None
+            
             try:
-                with ThreadPoolExecutor(max_workers=1) as tmp_exec:
-                    fut = tmp_exec.submit(ak.stock_zh_a_spot_em)
-                    return fut.result(timeout=timeout_seconds)
+                realtime_data_cache = _fetch_spot_em_with_timeout()
+                # 如果成功获取实时数据，使用快速方法建立价格映射表
+                if realtime_data_cache is not None and not realtime_data_cache.empty:
+                    code_column, price_column = self._detect_realtime_columns(realtime_data_cache)
+                    if code_column and price_column:
+                        # 使用快速方法建立价格映射
+                        price_map = self._build_price_map_fast(code_list, realtime_data_cache, code_column, price_column)
             except Exception:
-                return None
-        
-        try:
-            realtime_data_cache = _fetch_spot_em_with_timeout()
-            # 如果成功获取实时数据，使用快速方法建立价格映射表
-            if realtime_data_cache is not None and not realtime_data_cache.empty:
-                code_column, price_column = self._detect_realtime_columns(realtime_data_cache)
-                if code_column and price_column:
-                    # 使用快速方法建立价格映射
-                    price_map = self._build_price_map_fast(code_list, realtime_data_cache, code_column, price_column)
-        except Exception:
-            # 如果获取失败，继续使用历史数据，不影响扫描
-            pass
+                # 如果获取失败，继续使用历史数据，不影响扫描
+                pass
+        else:
+            # 盘后模式：不拉取实时行情，让后续展示逻辑直接使用当日收盘价
+            price_map = {}
         
         # 根据总数决定更新频率
         if total <= 100:
