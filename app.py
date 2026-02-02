@@ -211,6 +211,20 @@ ACTION_TIP = """
 ⬜ WAIT: 【观望】无机会
 """
 
+def map_action_to_display(action):
+    """将后端action字段映射为前端显示文案（仅用于UI展示，不改变后端数据）"""
+    if action == "STRONG BUY":
+        return "🔴 一级关注"
+    elif action in ["BUY (博弈)", "BUY (低吸)"]:
+        return "🟠 二级关注"
+    elif action in ["HOLD", "HOLD (持有)"]:
+        return "🟡 趋势观察"
+    elif action in ["WAIT", "WAIT (观望)"]:
+        return "⚪ 背景信号"
+    else:
+        # 如果遇到未知的action值，返回原值（保持兼容性）
+        return action
+
 STRATEGY_LOGIC = {
     "👑 四星共振": "近20日有涨停 + 向上跳空缺口 + 4连阳 + 量比>1.8",
     "🐲 妖股基因": "近60日涨停≥3次 + 获利筹码>80% + 上市>30天",
@@ -2224,7 +2238,7 @@ if st.session_state.get('watchlist'):
             st.write(f"**当前价格**: {item.get('当前价格', '未更新')}")
             st.write(f"**主力净流入**: {item.get('主力净流入(万)', 'N/A')}")
             st.write(f"**策略信号**: {item.get('策略信号', 'N/A')}")
-            st.write(f"**综合评级**: {item.get('综合评级', 'N/A')}")
+            st.write(f"**综合评级**: {map_action_to_display(item.get('综合评级', 'N/A'))}")
             st.write(f"**添加时间**: {item.get('添加时间', 'N/A')}")
             if st.button("🗑️ 移除", key=f"remove_watch_{i}"):
                 st.session_state['watchlist'].pop(i)
@@ -2377,7 +2391,7 @@ if show_watchlist:
                 '当前价格': item.get('当前价格', '未更新'),
                 '主力净流入(万)': item.get('主力净流入(万)', 'N/A'),
                 '策略信号': item.get('策略信号', 'N/A'),
-                '综合评级': item.get('综合评级', 'N/A'),
+                '综合评级': map_action_to_display(item.get('综合评级', 'N/A')),
                 '添加时间': item.get('添加时间', 'N/A')
             })
         
@@ -2416,6 +2430,14 @@ elif show_admin:
     # ==========================================
     st.title("👨‍💼 管理员后台系统")
     st.caption("用户数据管理与统计")
+    
+    # 策略逻辑白皮书（管理员和普通用户都显示）
+    with st.expander("📖 **策略逻辑白皮书**", expanded=False):
+        st.markdown("### 🔍 核心策略定义")
+        for k, v in STRATEGY_LOGIC.items(): 
+            st.markdown(f"- **{k}**: {v}")
+    
+    st.markdown("---")
     
     # 管理功能页面选择
     admin_page = st.radio(
@@ -2711,7 +2733,9 @@ else:
     # ==========================================
     # 策略展示逻辑 (保持原样)
     with st.expander("📖 **策略逻辑白皮书**", expanded=False):
-        for k, v in STRATEGY_LOGIC.items(): st.markdown(f"- **{k}**: {v}")
+        st.markdown("### 🔍 核心策略定义")
+        for k, v in STRATEGY_LOGIC.items(): 
+            st.markdown(f"- **{k}**: {v}")
 
     # 持仓监控面板
 if st.session_state['holdings']:
@@ -3094,16 +3118,20 @@ if st.session_state['scan_res']:
         "综合评级": st.column_config.TextColumn(
             "综合评级", 
             help="""操作建议说明：
-🟥 STRONG BUY: 【重点关注】确定性极高
-🟧 BUY (博弈): 【激进买入】短线博弈
-🟨 BUY (低吸): 【稳健买入】逢低建仓
-🟦 HOLD: 【持股】趋势完好，拿住不动
-⬜ WAIT: 【观望】无机会"""
+🔴 一级关注: STRONG BUY - 确定性极高，重点关注
+🟠 二级关注: BUY (博弈/低吸) - 激进买入或稳健买入
+🟡 趋势观察: HOLD - 趋势完好，持股观察
+⚪ 背景信号: WAIT - 观望，等待机会"""
         ),
         "priority": st.column_config.NumberColumn("priority", help="优先级评分，数值越高表示信号越强（0-100）", format="%d")
     }
     
-    st.dataframe(df_scan, hide_index=True, column_config=column_config)
+    # 创建显示用的副本，仅修改UI展示层（不改变原始数据）
+    df_scan_display = df_scan.copy()
+    if '综合评级' in df_scan_display.columns:
+        df_scan_display['综合评级'] = df_scan_display['综合评级'].apply(map_action_to_display)
+    
+    st.dataframe(df_scan_display, hide_index=True, column_config=column_config)
     
     # 添加关注按钮（在表格下方，使用紧凑布局）
     st.markdown("---")
