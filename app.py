@@ -2354,6 +2354,14 @@ if show_watchlist:
     st.title("⭐ 我的关注列表")
     st.caption("管理您关注的股票，实时查看价格和资金流向")
     
+    # 策略逻辑白皮书
+    with st.expander("📖 **策略逻辑白皮书**", expanded=False):
+        st.markdown("### 🔍 核心策略定义")
+        for k, v in STRATEGY_LOGIC.items(): 
+            st.markdown(f"- **{k}**: {v}")
+    
+    st.markdown("---")
+    
     if st.session_state.get('watchlist'):
         watchlist_count = len(st.session_state['watchlist'])
         st.success(f"📋 您已关注 {watchlist_count} 只股票")
