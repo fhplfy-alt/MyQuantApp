@@ -327,6 +327,192 @@ class QuantsEngine:
         except: pass
         finally: bs.logout()
         return stocks[:self.MAX_SCAN_LIMIT]
+    
+    def get_market_status(self):
+        """判断市场状态：牛市、熊市、震荡市
+        
+        Returns:
+            dict: {
+                'status': '牛市' | '熊市' | '震荡市',
+                'confidence': float,  # 置信度 0-1
+                'description': str,   # 状态描述
+                'index_data': dict    # 指数数据
+            }
+        """
+        try:
+            if not self.safe_bs_login():
+                return {
+                    'status': '震荡市',
+                    'confidence': 0.5,
+                    'description': '无法获取市场数据，默认判断为震荡市',
+                    'index_data': {}
+                }
+            
+            # 获取上证指数数据（最近60个交易日）
+            end_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=90)).strftime("%Y-%m-%d")
+            
+            rs = bs.query_history_k_data_plus(
+                "sh.000001",  # 上证指数
+                "date,close,pctChg,volume",
+                start_date=start_date,
+                end_date=end_date,
+                frequency="d",
+                adjustflag="3"
+            )
+            
+            data = []
+            while rs.next():
+                data.append(rs.get_row_data())
+            
+            if not data or len(data) < 20:
+                return {
+                    'status': '震荡市',
+                    'confidence': 0.5,
+                    'description': '数据不足，默认判断为震荡市',
+                    'index_data': {}
+                }
+            
+            df = pd.DataFrame(data, columns=["date", "close", "pctChg", "volume"])
+            df = df.apply(pd.to_numeric, errors='coerce')
+            df = df.dropna()
+            
+            if len(df) < 20:
+                return {
+                    'status': '震荡市',
+                    'confidence': 0.5,
+                    'description': '数据不足，默认判断为震荡市',
+                    'index_data': {}
+                }
+            
+            # 计算技术指标
+            df['MA5'] = df['close'].rolling(5).mean()
+            df['MA20'] = df['close'].rolling(20).mean()
+            df['MA60'] = df['close'].rolling(60).mean() if len(df) >= 60 else None
+            
+            current_close = df['close'].iloc[-1]
+            ma5_current = df['MA5'].iloc[-1]
+            ma20_current = df['MA20'].iloc[-1]
+            ma60_current = df['MA60'].iloc[-1] if df['MA60'] is not None and not pd.isna(df['MA60'].iloc[-1]) else None
+            
+            # 计算近20日涨跌幅
+            if len(df) >= 20:
+                price_20d_ago = df['close'].iloc[-20]
+                change_20d = ((current_close - price_20d_ago) / price_20d_ago) * 100
+            else:
+                change_20d = 0
+            
+            # 计算近60日涨跌幅
+            if len(df) >= 60:
+                price_60d_ago = df['close'].iloc[-60]
+                change_60d = ((current_close - price_60d_ago) / price_60d_ago) * 100
+            else:
+                change_60d = change_20d * 3  # 估算
+            
+            # 计算波动率（标准差）
+            if len(df) >= 20:
+                volatility = df['pctChg'].tail(20).std()
+            else:
+                volatility = df['pctChg'].std()
+            
+            # 判断市场状态
+            bull_score = 0
+            bear_score = 0
+            consolidation_score = 0
+            
+            # 牛市特征
+            if ma60_current is not None:
+                if current_close > ma5_current > ma20_current > ma60_current:
+                    bull_score += 3
+                elif current_close > ma20_current > ma60_current:
+                    bull_score += 2
+                elif current_close > ma60_current:
+                    bull_score += 1
+            else:
+                if current_close > ma5_current > ma20_current:
+                    bull_score += 2
+                elif current_close > ma20_current:
+                    bull_score += 1
+            
+            if change_20d > 5:
+                bull_score += 2
+            elif change_20d > 0:
+                bull_score += 1
+            
+            if change_60d > 10:
+                bull_score += 2
+            elif change_60d > 0:
+                bull_score += 1
+            
+            # 熊市特征
+            if ma60_current is not None:
+                if current_close < ma5_current < ma20_current < ma60_current:
+                    bear_score += 3
+                elif current_close < ma20_current < ma60_current:
+                    bear_score += 2
+                elif current_close < ma60_current:
+                    bear_score += 1
+            else:
+                if current_close < ma5_current < ma20_current:
+                    bear_score += 2
+                elif current_close < ma20_current:
+                    bear_score += 1
+            
+            if change_20d < -5:
+                bear_score += 2
+            elif change_20d < 0:
+                bear_score += 1
+            
+            if change_60d < -10:
+                bear_score += 2
+            elif change_60d < 0:
+                bear_score += 1
+            
+            # 震荡市特征（波动率中等，趋势不明显）
+            if volatility < 2.5 and abs(change_20d) < 3:
+                consolidation_score += 3
+            elif volatility < 3.5 and abs(change_20d) < 5:
+                consolidation_score += 2
+            elif abs(change_20d) < 5:
+                consolidation_score += 1
+            
+            # 判断最终状态
+            max_score = max(bull_score, bear_score, consolidation_score)
+            
+            if max_score == bull_score and bull_score >= 4:
+                status = '牛市'
+                confidence = min(0.9, 0.5 + bull_score * 0.1)
+                description = f"市场呈现牛市特征：指数站上多条均线，近20日涨幅{change_20d:.2f}%，近60日涨幅{change_60d:.2f}%"
+            elif max_score == bear_score and bear_score >= 4:
+                status = '熊市'
+                confidence = min(0.9, 0.5 + bear_score * 0.1)
+                description = f"市场呈现熊市特征：指数跌破多条均线，近20日跌幅{abs(change_20d):.2f}%，近60日跌幅{abs(change_60d):.2f}%"
+            else:
+                status = '震荡市'
+                confidence = min(0.85, 0.5 + consolidation_score * 0.1)
+                description = f"市场处于震荡整理状态：近20日涨跌幅{change_20d:.2f}%，波动率{volatility:.2f}%"
+            
+            return {
+                'status': status,
+                'confidence': confidence,
+                'description': description,
+                'index_data': {
+                    'current_close': current_close,
+                    'change_20d': change_20d,
+                    'change_60d': change_60d,
+                    'volatility': volatility,
+                    'ma5': ma5_current,
+                    'ma20': ma20_current,
+                    'ma60': ma60_current
+                }
+            }
+        except Exception as e:
+            return {
+                'status': '震荡市',
+                'confidence': 0.5,
+                'description': f'判断过程出错，默认判断为震荡市: {str(e)}',
+                'index_data': {}
+            }
 
     def calc_winner_rate(self, df, current_price):
         if df.empty: return 0.0
@@ -663,7 +849,8 @@ class QuantsEngine:
             data=data,
             max_price=max_price,
             realtime_data_cache=realtime_data_cache,
-            price_map=price_map
+            price_map=price_map,
+            market_status=getattr(self, '_current_market_status', None)
         )
         if not analysis:
             return None
@@ -690,12 +877,15 @@ class QuantsEngine:
             "option": f"{code} | {name}"
         }
 
-    def _analyze_single_stock_from_history(self, code, data, max_price=None, realtime_data_cache=None, price_map=None, allow_realtime_price=True):
+    def _analyze_single_stock_from_history(self, code, data, max_price=None, realtime_data_cache=None, price_map=None, allow_realtime_price=True, market_status=None):
         """从历史K线数据中计算策略信号（纯计算逻辑，便于并发）
 
         说明：
         - 该方法不访问baostock，只做DataFrame构建与指标计算
-        - scan_market_optimized 会“主线程串行拉取历史数据 + 线程池并行计算”，以兼顾稳定性与速度
+        - scan_market_optimized 会"主线程串行拉取历史数据 + 线程池并行计算"，以兼顾稳定性与速度
+        
+        Args:
+            market_status: 市场状态字典，包含 'status' 字段（'牛市'|'熊市'|'震荡市'）
         """
         if not data or len(data) < 60:
             return None
@@ -736,6 +926,23 @@ class QuantsEngine:
         bb_upper, _bb_mid, bb_lower = self.calc_bollinger(df)
 
         signal_tags, priority, action = [], 0, "WAIT (观望)"
+        
+        # 根据市场状态设置策略参数
+        market_type = market_status.get('status', '震荡市') if market_status else '震荡市'
+        
+        # 策略参数：根据市场状态调整
+        if market_type == '震荡市':
+            # 震荡市：降低门槛
+            main_force_threshold = 5000000  # 500万（原1000万）
+            winner_rate_threshold_high = 60  # 60%（原80%）
+            winner_rate_threshold_medium = 60  # 60%（原70%）
+            limit_up_count_threshold = 2  # 2次（原3次）
+        else:
+            # 牛市和熊市：使用原策略（严格条件）
+            main_force_threshold = 10000000  # 1000万
+            winner_rate_threshold_high = 80  # 80%
+            winner_rate_threshold_medium = 70  # 70%
+            limit_up_count_threshold = 3  # 3次
 
         # 计算放量确认条件（用于增强激进信号可信度）
         try:
@@ -745,10 +952,6 @@ class QuantsEngine:
         except:
             has_volume_confirmation = False  # 异常时默认不要求放量确认（安全优先）
 
-        # 原有策略保留（保持原功能不变）
-        if (all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62):
-            signal_tags.append("🔴温和吸筹"); priority = 60; action = "BUY (低吸)"
-
         # 获取主力资金净流入（用于激进信号过滤，单位：元）
         main_force_inflow = 0
         try:
@@ -756,23 +959,107 @@ class QuantsEngine:
         except Exception:
             pass  # 获取失败时不影响其他逻辑，默认为0
         
-        if all(df['turn'].tail(2) > 5) and winner_rate > 70:
-            # 激进信号：🔥换手锁仓 - 需要主力资金净流入 > 1000万元（10000000元）
-            if main_force_inflow > 10000000:
-                signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
+        # ========== 根据市场状态应用不同策略 ==========
+        
+        if market_type == '牛市':
+            # 牛市策略：原策略（严格条件）
+            # 原有策略保留（保持原功能不变）
+            if (all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 62):
+                signal_tags.append("🔴温和吸筹"); priority = 60; action = "BUY (低吸)"
+            
+            if all(df['turn'].tail(2) > 5) and winner_rate > winner_rate_threshold_medium:
+                # 激进信号：🔥换手锁仓 - 需要主力资金净流入 > 阈值
+                if main_force_inflow > main_force_threshold:
+                    signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
 
-        # 激进信号：🐲妖股基因 - 需要放量确认 + 主力资金净流入 > 1000万元（10000000元）
-        if len(df.tail(60)[df.tail(60)['pctChg'] > 9.5]) >= 3 and winner_rate > 80:
-            if has_volume_confirmation and main_force_inflow > 10000000:
-                signal_tags.append("🐲妖股基因"); priority = 90; action = "STRONG BUY"
+            # 激进信号：🐲妖股基因 - 需要放量确认 + 主力资金净流入 > 阈值
+            if len(df.tail(60)[df.tail(60)['pctChg'] > 9.5]) >= limit_up_count_threshold and winner_rate > winner_rate_threshold_high:
+                if has_volume_confirmation and main_force_inflow > main_force_threshold:
+                    signal_tags.append("🐲妖股基因"); priority = 90; action = "STRONG BUY"
 
-        recent_20 = df.tail(20)
-        has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
-        is_double_vol = (curr['volume'] > prev['volume'] * 1.8)
-        # 激进信号：👑四星共振 - 需要放量确认 + 主力资金净流入 > 1000万元（10000000元）
-        if has_limit_up_20 and is_double_vol:
-            if has_volume_confirmation and main_force_inflow > 10000000:
-                signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
+            recent_20 = df.tail(20)
+            has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
+            is_double_vol = (curr['volume'] > prev['volume'] * 1.8)
+            # 激进信号：👑四星共振 - 需要放量确认 + 主力资金净流入 > 阈值
+            if has_limit_up_20 and is_double_vol:
+                if has_volume_confirmation and main_force_inflow > main_force_threshold:
+                    signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
+        
+        elif market_type == '熊市':
+            # 熊市策略：超跌反弹策略
+            # 1. 超跌反弹：RSI超卖 + 价格大幅下跌后企稳
+            if rsi is not None and rsi < 35:
+                # 计算近期跌幅
+                if len(df) >= 10:
+                    price_10d_ago = df['close'].iloc[-10]
+                    decline_10d = ((curr['close'] - price_10d_ago) / price_10d_ago) * 100
+                    if decline_10d < -10:  # 10日内跌幅超过10%
+                        signal_tags.append("💎超跌反弹")
+                        priority = max(priority, 75)
+                        action = "BUY (低吸)"
+            
+            # 2. 底部放量：价格低位 + 成交量放大
+            if len(df) >= 20:
+                price_20d_ago = df['close'].iloc[-20]
+                decline_20d = ((curr['close'] - price_20d_ago) / price_20d_ago) * 100
+                if decline_20d < -15 and curr['volume'] > df['volume'].tail(20).mean() * 1.5:
+                    signal_tags.append("📊底部放量")
+                    priority = max(priority, 70)
+                    if action in ["WAIT (观望)", "HOLD (持有)"]:
+                        action = "BUY (低吸)"
+            
+            # 3. 布林带下轨支撑
+            if bb_lower is not None and curr['close'] <= bb_lower * 1.02:
+                signal_tags.append("📊下轨支撑")
+                priority = max(priority, 65)
+                if action in ["WAIT (观望)", "HOLD (持有)"]:
+                    action = "BUY (低吸)"
+            
+            # 4. RSI超卖反弹（增强版）
+            if rsi is not None and len(df) >= 2:
+                prev_rsi = self.calc_rsi(df.iloc[:-1])
+                if prev_rsi is not None and prev_rsi < 25 and rsi > 30:
+                    signal_tags.append("💎RSI超卖反弹")
+                    priority = max(priority, 75)
+                    if action in ["WAIT (观望)", "HOLD (持有)"]:
+                        action = "BUY (低吸)"
+        
+        else:  # 震荡市
+            # 震荡市策略：平台突破策略 + 降低门槛
+            # 1. 平台突破：价格在区间内震荡后突破
+            if len(df) >= 20:
+                recent_high = df['high'].tail(20).max()
+                recent_low = df['low'].tail(20).min()
+                price_range = recent_high - recent_low
+                if price_range > 0:
+                    price_position = (curr['close'] - recent_low) / price_range
+                    # 突破上沿
+                    if price_position > 0.85 and curr['volume'] > df['volume'].tail(20).mean() * 1.3:
+                        signal_tags.append("📊平台突破")
+                        priority = max(priority, 75)
+                        action = "BUY (博弈)"
+            
+            # 2. 温和吸筹（降低门槛）
+            if (all(df['pctChg'].tail(3) > 0) and df['pctChg'].tail(3).sum() <= 5 and winner_rate > 55):
+                signal_tags.append("🔴温和吸筹"); priority = max(priority, 60); action = "BUY (低吸)"
+            
+            # 3. 换手锁仓（降低门槛）
+            if all(df['turn'].tail(2) > 5) and winner_rate > winner_rate_threshold_medium:
+                if main_force_inflow > main_force_threshold:
+                    signal_tags.append("🔥换手锁仓"); priority = max(priority, 70); action = "BUY (博弈)"
+
+            # 4. 妖股基因（降低门槛）
+            if len(df.tail(60)[df.tail(60)['pctChg'] > 9.5]) >= limit_up_count_threshold and winner_rate > winner_rate_threshold_high:
+                if has_volume_confirmation and main_force_inflow > main_force_threshold:
+                    signal_tags.append("🐲妖股基因"); priority = 90; action = "STRONG BUY"
+
+            # 5. 四星共振（降低门槛）
+            recent_20 = df.tail(20)
+            has_limit_up_20 = len(recent_20[recent_20['pctChg'] > 9.5]) > 0
+            is_double_vol = (curr['volume'] > prev['volume'] * 1.8)
+            if has_limit_up_20 and is_double_vol:
+                if has_volume_confirmation and main_force_inflow > main_force_threshold:
+                    signal_tags.append("👑四星共振"); priority = 100; action = "STRONG BUY"
         
         if rsi is not None and len(df) >= 2:
             prev_rsi = self.calc_rsi(df.iloc[:-1])
@@ -915,6 +1202,13 @@ class QuantsEngine:
         if not self.safe_bs_login():
             st.error("❌ baostock登录失败，无法进行扫描")
             return [], [], []
+        
+        # 获取市场状态（用于调整策略参数）
+        try:
+            self._current_market_status = self.get_market_status()
+        except Exception:
+            self._current_market_status = {'status': '震荡市', 'confidence': 0.5, 'description': '无法获取市场状态，默认震荡市'}
+        
         total = len(code_list)
         progress_bar = st.progress(0, text=f"🚀 正在扫描 (0/{total}) | 命中: 0 只")
         
@@ -1051,7 +1345,7 @@ class QuantsEngine:
                 except Exception:
                     completed += 1
                     continue
-                # 把“计算部分”丢到线程池并发执行
+                # 把"计算部分"丢到线程池并发执行
                 fut = executor.submit(
                     self._analyze_single_stock_from_history,
                     stock_code,
@@ -1059,7 +1353,8 @@ class QuantsEngine:
                     max_price,
                     realtime_data_cache,
                     price_map,
-                    False  # 批量扫描模式下不逐票拉实时价，避免大量外部连接
+                    False,  # 批量扫描模式下不逐票拉实时价，避免大量外部连接
+                    getattr(self, '_current_market_status', None)  # 传递市场状态
                 )
                 future_map[fut] = stock_code
 
@@ -2084,6 +2379,155 @@ if 'full_pool' not in st.session_state: st.session_state['full_pool'] = []
 if 'scan_res' not in st.session_state: st.session_state['scan_res'] = []
 if 'valid_options' not in st.session_state: st.session_state['valid_options'] = []
 if 'watchlist' not in st.session_state: st.session_state['watchlist'] = []
+
+# ==========================================
+# 市场状态显示和当前市场建议
+# ==========================================
+# 获取市场状态（带缓存，避免频繁请求）
+if 'market_status' not in st.session_state or st.session_state.get('market_status_time', 0) < time.time() - 300:
+    # 每5分钟更新一次市场状态
+    try:
+        st.session_state['market_status'] = engine.get_market_status()
+        st.session_state['market_status_time'] = time.time()
+    except Exception:
+        st.session_state['market_status'] = {'status': '震荡市', 'confidence': 0.5, 'description': '无法获取市场状态', 'index_data': {}}
+
+market_status = st.session_state.get('market_status', {'status': '震荡市', 'confidence': 0.5, 'description': '无法获取市场状态', 'index_data': {}})
+
+# 显示市场状态（在界面顶部）
+st.markdown("---")
+col1, col2, col3 = st.columns([2, 2, 2])
+
+with col1:
+    status = market_status.get('status', '震荡市')
+    confidence = market_status.get('confidence', 0.5)
+    
+    # 根据市场状态设置颜色和图标
+    if status == '牛市':
+        status_color = '🟢'
+        status_bg_color = '#d4edda'
+        status_text_color = '#155724'
+    elif status == '熊市':
+        status_color = '🔴'
+        status_bg_color = '#f8d7da'
+        status_text_color = '#721c24'
+    else:
+        status_color = '🟡'
+        status_bg_color = '#fff3cd'
+        status_text_color = '#856404'
+    
+    st.markdown(f"""
+    <div style="background-color: {status_bg_color}; padding: 15px; border-radius: 10px; border-left: 5px solid {status_text_color};">
+        <h3 style="margin: 0; color: {status_text_color};">
+            {status_color} <strong>当前市场状态：{status}</strong>
+        </h3>
+        <p style="margin: 5px 0 0 0; color: {status_text_color}; font-size: 0.9em;">
+            置信度：{confidence*100:.0f}% | {market_status.get('description', '')}
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    # 显示指数数据
+    index_data = market_status.get('index_data', {})
+    if index_data:
+        current_close = index_data.get('current_close', 0)
+        change_20d = index_data.get('change_20d', 0)
+        change_60d = index_data.get('change_60d', 0)
+        
+        st.markdown(f"""
+        <div style="background-color: #e7f3ff; padding: 15px; border-radius: 10px; border-left: 5px solid #0066cc;">
+            <h4 style="margin: 0; color: #0066cc;">📊 上证指数</h4>
+            <p style="margin: 5px 0; color: #0066cc; font-size: 1.1em;"><strong>{current_close:.2f}</strong></p>
+            <p style="margin: 0; color: #666; font-size: 0.85em;">
+                近20日：<span style="color: {'red' if change_20d < 0 else 'green'}">{change_20d:+.2f}%</span><br>
+                近60日：<span style="color: {'red' if change_60d < 0 else 'green'}">{change_60d:+.2f}%</span>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background-color: #e7f3ff; padding: 15px; border-radius: 10px; border-left: 5px solid #0066cc;">
+            <h4 style="margin: 0; color: #0066cc;">📊 上证指数</h4>
+            <p style="margin: 5px 0; color: #666;">数据获取中...</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+with col3:
+    # 刷新按钮
+    if st.button("🔄 刷新市场状态", use_container_width=True):
+        try:
+            st.session_state['market_status'] = engine.get_market_status()
+            st.session_state['market_status_time'] = time.time()
+            st.rerun()
+        except Exception as e:
+            st.error(f"刷新失败: {str(e)}")
+
+# 当前市场建议板块
+st.markdown("---")
+st.subheader("💡 当前市场建议")
+
+# 根据市场状态生成建议
+status = market_status.get('status', '震荡市')
+confidence = market_status.get('confidence', 0.5)
+
+if status == '牛市':
+    suggested_position = "70-90%"
+    strategy = "原策略（严格条件）"
+    risk_tips = [
+        "✅ 市场处于上升趋势，可适当提高仓位",
+        "⚠️ 注意控制单只股票仓位，避免过度集中",
+        "⚠️ 关注技术指标，及时止盈止损",
+        "⚠️ 避免追高，等待回调机会"
+    ]
+elif status == '熊市':
+    suggested_position = "20-40%"
+    strategy = "超跌反弹策略"
+    risk_tips = [
+        "⚠️ 市场处于下跌趋势，建议降低仓位",
+        "✅ 重点关注超跌反弹机会，寻找底部放量股票",
+        "⚠️ 严格控制风险，设置止损位",
+        "⚠️ 避免重仓操作，保持资金流动性"
+    ]
+else:  # 震荡市
+    suggested_position = "50-70%"
+    strategy = "平台突破策略（降低门槛）"
+    risk_tips = [
+        "✅ 市场处于震荡整理，可适度参与",
+        "✅ 策略门槛已降低：主力资金500万、获利筹码60%、涨停2次",
+        "⚠️ 关注平台突破信号，寻找突破机会",
+        "⚠️ 注意区间震荡，及时止盈"
+    ]
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown(f"""
+    <div style="background-color: #f0f0f0; padding: 15px; border-radius: 10px;">
+        <h4 style="margin: 0 0 10px 0;">💰 今日建议仓位</h4>
+        <p style="font-size: 1.5em; color: #0066cc; font-weight: bold; margin: 0;">{suggested_position}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    st.markdown(f"""
+    <div style="background-color: #f0f0f0; padding: 15px; border-radius: 10px;">
+        <h4 style="margin: 0 0 10px 0;">📈 操作策略</h4>
+        <p style="font-size: 1.1em; color: #333; margin: 0;">{strategy}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col3:
+    st.markdown(f"""
+    <div style="background-color: #f0f0f0; padding: 15px; border-radius: 10px;">
+        <h4 style="margin: 0 0 10px 0;">⚠️ 风险提示</h4>
+        <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+            {''.join([f'<li>{tip}</li>' for tip in risk_tips])}
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown("---")
 
 # 持仓数据持久化存储（按用户隔离）
 def get_holdings_file():
