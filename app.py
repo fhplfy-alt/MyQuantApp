@@ -2504,7 +2504,7 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown(f"""
     <div style="background-color: #f0f0f0; padding: 15px; border-radius: 10px;">
-        <h4 style="margin: 0 0 10px 0;">💰 今日建议仓位</h4>
+        <h4 style="margin: 0 0 10px 0; color: #333333;">💰 今日建议仓位</h4>
         <p style="font-size: 1.5em; color: #0066cc; font-weight: bold; margin: 0;">{suggested_position}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -2512,17 +2512,17 @@ with col1:
 with col2:
     st.markdown(f"""
     <div style="background-color: #f0f0f0; padding: 15px; border-radius: 10px;">
-        <h4 style="margin: 0 0 10px 0;">📈 操作策略</h4>
-        <p style="font-size: 1.1em; color: #333; margin: 0;">{strategy}</p>
+        <h4 style="margin: 0 0 10px 0; color: #333333;">📈 操作策略</h4>
+        <p style="font-size: 1.1em; color: #333333; margin: 0;">{strategy}</p>
     </div>
     """, unsafe_allow_html=True)
 
 with col3:
     st.markdown(f"""
     <div style="background-color: #f0f0f0; padding: 15px; border-radius: 10px;">
-        <h4 style="margin: 0 0 10px 0;">⚠️ 风险提示</h4>
-        <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
-            {''.join([f'<li>{tip}</li>' for tip in risk_tips])}
+        <h4 style="margin: 0 0 10px 0; color: #333333;">⚠️ 风险提示</h4>
+        <ul style="margin: 0; padding-left: 20px; font-size: 0.9em; color: #333333;">
+            {''.join([f'<li style="color: #333333;">{tip}</li>' for tip in risk_tips])}
         </ul>
     </div>
     """, unsafe_allow_html=True)
