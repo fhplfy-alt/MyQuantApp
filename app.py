@@ -3732,7 +3732,7 @@ if st.session_state['valid_options']:
                                 '日期': future['dates'],  # 已经是"明日 (MM-DD)"格式
                                 '预测价格': [f"¥{p:.2f}" for p in future['prices']],
                                 '涨跌金额': [f"{p - current_price:+.2f}" for p in future['prices']],
-                                '涨跌幅': [f"{c:+.2f}%" for c in future['changes']]
+                                '涨跌幅': [f"{c['pct']:+.2f}%" for c in future['changes']]  # 从字典中提取pct值
                             })
                             st.dataframe(pred_df, hide_index=True)
                     else:
